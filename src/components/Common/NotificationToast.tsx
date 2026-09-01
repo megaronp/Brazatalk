@@ -18,27 +18,16 @@ interface SingleToastProps {
 }
 
 const SingleToast: React.FC<SingleToastProps> = ({ item, onDismiss, onNavigate }) => {
-  const [progress, setProgress] = useState(100);
   const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
     if (isPaused) return;
 
-    const startTime = Date.now();
-    const intervalTime = 50;
+    const timer = setTimeout(() => {
+      onDismiss(item.id);
+    }, TOAST_DURATION_MS);
 
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      const remainingPct = Math.max(0, 100 - (elapsed / TOAST_DURATION_MS) * 100);
-      setProgress(remainingPct);
-
-      if (elapsed >= TOAST_DURATION_MS) {
-        clearInterval(interval);
-        onDismiss(item.id);
-      }
-    }, intervalTime);
-
-    return () => clearInterval(interval);
+    return () => clearTimeout(timer);
   }, [item.id, isPaused, onDismiss]);
 
   const getIcon = (type: NotificationItem['type']) => {
@@ -94,11 +83,15 @@ const SingleToast: React.FC<SingleToastProps> = ({ item, onDismiss, onNavigate }
         </div>
       </div>
 
-      {/* Auto-dismiss progress bar */}
+      {/* Auto-dismiss progress bar with GPU-accelerated CSS animation (0% JS polling overhead) */}
       <div className="w-full bg-white/[0.06] h-1 rounded-full overflow-hidden">
         <div
-          className="h-full bg-indigo-500 transition-all duration-75 ease-linear rounded-full"
-          style={{ width: `${progress}%` }}
+          className="h-full bg-indigo-500 rounded-full"
+          style={{
+            width: '100%',
+            animation: `toast-progress ${TOAST_DURATION_MS}ms linear forwards`,
+            animationPlayState: isPaused ? 'paused' : 'running',
+          }}
         />
       </div>
     </motion.div>

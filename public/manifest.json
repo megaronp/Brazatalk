@@ -1,14 +1,15 @@
 {
-  "id": "brazatalk-app",
+  "id": "/",
   "name": "Braza Talk - Voz, Chat & Comunidade",
   "short_name": "Braza Talk",
   "description": "Plataforma de comunicação em tempo real com voz HD, chat, salas de conferência e criptografia ponta a ponta.",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "window-controls-overlay", "minimal-ui"],
   "orientation": "any",
   "background_color": "#090a0f",
-  "theme_color": "#4f46e5",
+  "theme_color": "#090a0f",
   "categories": ["social", "utilities", "productivity"],
   "icons": [
     {
@@ -27,7 +28,13 @@
       "src": "/icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ]
 }

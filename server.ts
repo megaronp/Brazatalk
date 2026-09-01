@@ -86,6 +86,29 @@ wss.on('connection', (ws) => {
           break;
         }
 
+        case 'user-profile-updated': {
+          clients.forEach((client) => {
+            if (client.userId === msg.userId || client.ws === ws) {
+              if (msg.userName) client.userName = msg.userName;
+              if (msg.userAvatar) client.userAvatar = msg.userAvatar;
+              if (msg.channelId && !client.currentChannelId) client.currentChannelId = msg.channelId;
+            }
+          });
+
+          // Broadcast to all clients to update voice participants, member lists, and active rooms immediately
+          broadcast({
+            type: 'user-profile-updated',
+            userId: msg.userId,
+            userName: msg.userName,
+            userAvatar: msg.userAvatar,
+            status: msg.status,
+            customStatus: msg.customStatus,
+            bio: msg.bio,
+            channelId: msg.channelId,
+          });
+          break;
+        }
+
         case 'chat-message': {
           // Broadcast message to all users in the server / channel
           broadcast({

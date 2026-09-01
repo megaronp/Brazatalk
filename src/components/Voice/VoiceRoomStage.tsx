@@ -21,6 +21,7 @@ import {
   Headphones,
   Sliders,
   UserPlus,
+  Users,
 } from 'lucide-react';
 import { soundEngine } from '../../services/soundEngine';
 
@@ -32,6 +33,8 @@ interface VoiceRoomStageProps {
   isWatchingStreamId: string | null;
   onStopWatchingStream: () => void;
   onToggleMobileNav?: () => void;
+  onToggleMemberList?: () => void;
+  showMemberList?: boolean;
   screenMediaStream?: MediaStream | null;
   onChangeScreenSource?: () => void;
   onToggleScreenShare?: () => void;
@@ -46,6 +49,8 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
   isWatchingStreamId,
   onStopWatchingStream,
   onToggleMobileNav,
+  onToggleMemberList,
+  showMemberList,
   screenMediaStream,
   onChangeScreenSource,
   onToggleScreenShare,
@@ -264,6 +269,22 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
           >
             {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
+
+          {onToggleMemberList && (
+            <button
+              id="btn-stage-toggle-member-list"
+              onClick={onToggleMemberList}
+              title={showMemberList ? 'Ocultar Lista de Membros' : 'Exibir Membros da Sala'}
+              className={`p-1.5 sm:p-2 rounded-xl border transition-colors cursor-pointer flex items-center gap-1.5 ${
+                showMemberList
+                  ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/40'
+                  : 'bg-[#181c2b] text-slate-300 hover:text-white border-white/[0.06]'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span className="hidden sm:inline text-xs font-semibold">Membros</span>
+            </button>
+          )}
         </div>
       </div>
 

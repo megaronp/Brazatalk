@@ -51,3 +51,12 @@
 .glow-rose {
   box-shadow: 0 0 20px -3px rgba(244, 63, 94, 0.4);
 }
+
+@keyframes toast-progress {
+  from {
+    width: 100%;
+  }
+  to {
+    width: 0%;
+  }
+}

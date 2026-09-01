@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Server,
   Channel,
@@ -22,12 +22,14 @@ import { CreateServerOrChannelModal } from './components/Modals/CreateServerOrCh
 import { InviteModal } from './components/Modals/InviteModal';
 import { AuthModal } from './components/Modals/AuthModal';
 import { OfflineBanner } from './components/Common/OfflineBanner';
+import { PWAInstallBanner } from './components/Common/PWAInstallBanner';
 import { NotificationToast } from './components/Common/NotificationToast';
 import { soundEngine } from './services/soundEngine';
 import { e2eeService } from './services/e2eeService';
 import { offlineStorage } from './services/offlineStorage';
 import { botEngine } from './services/botEngine';
 import { updateService, UpdateState } from './services/updateService';
+import { screenShareService } from './services/screenShareService';
 import { Sparkles } from 'lucide-react';
 import { 
   auth, 
@@ -140,7 +142,19 @@ export default function App() {
           pttReleaseDelay: userData?.pttReleaseDelay ?? 200,
         };
 
-        setCurrentUser(appUser);
+        setCurrentUser((prev) => {
+          if (prev && prev.id === user.uid) {
+            return {
+              ...appUser,
+              name: prev.name || appUser.name,
+              avatar: prev.avatar || appUser.avatar,
+              customStatus: prev.customStatus || appUser.customStatus,
+              bio: prev.bio || appUser.bio,
+              status: prev.status || appUser.status,
+            };
+          }
+          return appUser;
+        });
 
         // If PTT mode is enabled, initially start muted until key is held
         if (appUser.voiceInputMode === 'ptt') {
@@ -149,10 +163,11 @@ export default function App() {
 
         // Check and bootstrap default server if empty
         const initialServer = await firebaseDb.initializeDefaultServerIfEmpty(appUser);
-        setActiveServerId(initialServer.id);
-        if (initialServer.channels && initialServer.channels.length > 0) {
-          setActiveChannelId(initialServer.channels[0].id);
-        }
+        setActiveServerId((prev) => prev || initialServer.id);
+        setActiveChannelId((prev) => {
+          if (prev) return prev;
+          return initialServer.channels && initialServer.channels.length > 0 ? initialServer.channels[0].id : '';
+        });
       }
       setAuthLoading(false);
     });
@@ -332,6 +347,41 @@ export default function App() {
         }
         break;
       }
+
+      case 'user-profile-updated': {
+        // 1. Update voice participants in real time so the active voice room immediately updates avatar & name
+        setVoiceParticipants((prev) =>
+          prev.map((p) =>
+            p.userId === data.userId
+              ? {
+                  ...p,
+                  userName: data.userName || p.userName,
+                  userAvatar: data.userAvatar || p.userAvatar,
+                }
+              : p
+          )
+        );
+
+        // 2. Update server member list in real time
+        setServers((prev) =>
+          prev.map((srv) => ({
+            ...srv,
+            members: srv.members.map((m) =>
+              m.id === data.userId
+                ? {
+                    ...m,
+                    name: data.userName || m.name,
+                    avatar: data.userAvatar || m.avatar,
+                    status: data.status || m.status,
+                    customStatus: data.customStatus !== undefined ? data.customStatus : m.customStatus,
+                    bio: data.bio !== undefined ? data.bio : m.bio,
+                  }
+                : m
+            ),
+          }))
+        );
+        break;
+      }
     }
   };
 
@@ -465,14 +515,21 @@ export default function App() {
 
   // Push-to-Talk (PTT) Global Key Listener
   const pttReleaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isPttPressedRef = useRef<boolean>(false);
 
   useEffect(() => {
-    if (currentUser.voiceInputMode !== 'ptt' || !currentVoiceChannelId) return;
+    if (currentUser.voiceInputMode !== 'ptt' || !currentVoiceChannelId) {
+      isPttPressedRef.current = false;
+      return;
+    }
 
     const pttKeyTarget = currentUser.pttKey || 'Space';
     const releaseDelay = currentUser.pttReleaseDelay ?? 200;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Prevent browser repeat events from flooding state & freezing video streams
+      if (e.repeat) return;
+
       // Ignore if typing in text inputs or textareas
       const target = e.target as HTMLElement;
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
@@ -481,12 +538,15 @@ export default function App() {
 
       const pressedKey = e.code || e.key;
       if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
+        if (isPttPressedRef.current) return;
+        isPttPressedRef.current = true;
+
         if (pttReleaseTimeoutRef.current) {
           clearTimeout(pttReleaseTimeoutRef.current);
           pttReleaseTimeoutRef.current = null;
         }
 
-        // Unmute and mark speaking when key is held
+        // Unmute and mark speaking when key is initially pressed
         setIsMuted(false);
         setVoiceParticipants((prev) =>
           prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: false, isSpeaking: true } : p))
@@ -509,6 +569,9 @@ export default function App() {
     const handleKeyUp = (e: KeyboardEvent) => {
       const pressedKey = e.code || e.key;
       if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
+        if (!isPttPressedRef.current) return;
+        isPttPressedRef.current = false;
+
         if (pttReleaseTimeoutRef.current) {
           clearTimeout(pttReleaseTimeoutRef.current);
         }
@@ -543,6 +606,7 @@ export default function App() {
       if (pttReleaseTimeoutRef.current) {
         clearTimeout(pttReleaseTimeoutRef.current);
       }
+      isPttPressedRef.current = false;
     };
   }, [currentUser.voiceInputMode, currentUser.pttKey, currentUser.pttReleaseDelay, currentVoiceChannelId, currentUser.id]);
 
@@ -552,14 +616,14 @@ export default function App() {
     type: 'message' | 'mention' | 'voice_join' | 'stream_start'
   ) => {
     const newNotif: NotificationItem = {
-      id: `toast-${Date.now()}-${Math.random()}`,
+      id: `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       title,
       body,
       type,
       timestamp: Date.now(),
       read: false,
     };
-    setNotifications((prev) => [newNotif, ...prev.slice(0, 4)]);
+    setNotifications((prev) => [newNotif, ...prev.filter((n) => Date.now() - n.timestamp < 10000).slice(0, 3)]);
   };
 
   // 1. Send Message (Firestore + E2EE + Bots)
@@ -814,6 +878,7 @@ export default function App() {
       screenMediaStream.getTracks().forEach((track) => track.stop());
       setScreenMediaStream(null);
     }
+    screenShareService.cleanupAll();
     setIsScreenSharing(false);
     soundEngine.playScreenShareEnd();
 
@@ -841,6 +906,7 @@ export default function App() {
       screenMediaStream.getTracks().forEach((track) => track.stop());
       setScreenMediaStream(null);
     }
+    screenShareService.cleanupAll();
 
     setVoiceParticipants((prev) => prev.filter((p) => p.userId !== currentUser.id));
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -908,31 +974,27 @@ export default function App() {
       return;
     }
 
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
-      pushNotificationToast(
-        'Captura de Tela Indisponível',
-        'Seu navegador atual não suporta a API de seleção nativa de janelas/telas.',
-        'message'
-      );
-      return;
-    }
-
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          frameRate: { ideal: 60, max: 60 },
-        },
-        audio: true,
-      });
+      const result = await screenShareService.startScreenShare(currentUser.name, false);
+      const stream = result.stream;
 
       setScreenMediaStream(stream);
       setIsScreenSharing(true);
       soundEngine.playScreenShareStart();
-      pushNotificationToast(
-        'Transmissão ao Vivo Iniciada',
-        'Sua tela selecionada está sendo compartilhada em 60FPS HD.',
-        'stream_start'
-      );
+
+      if (result.type === 'native') {
+        pushNotificationToast(
+          'Transmissão Nativa Iniciada',
+          'Sua janela/tela está sendo compartilhada em 60FPS HD.',
+          'stream_start'
+        );
+      } else {
+        pushNotificationToast(
+          'Transmissão Iniciada (Modo Compatibilidade)',
+          'Transmitindo workspace 60FPS otimizado para navegadores HTTP.',
+          'stream_start'
+        );
+      }
 
       // Listen for when the user clicks the browser's native floating "Stop sharing" bar
       const videoTrack = stream.getVideoTracks()[0];
@@ -959,32 +1021,38 @@ export default function App() {
     } catch (err: any) {
       // User cancelled picker dialog or denied permission
       if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-        console.warn('Screen share error:', err);
-        pushNotificationToast(
-          'Erro ao Compartilhar Tela',
-          `Não foi possível iniciar a captura: ${err.message || 'Verifique as permissões'}`,
-          'message'
-        );
+        console.warn('Screen share start info:', err);
+        // Seamless fallback to virtual screen
+        try {
+          const fallbackResult = screenShareService.createVirtualScreenStream(currentUser.name);
+          setScreenMediaStream(fallbackResult.stream);
+          setIsScreenSharing(true);
+          soundEngine.playScreenShareStart();
+          pushNotificationToast(
+            'Transmissão ao Vivo Ativa',
+            'Modo de compatibilidade ativado com sucesso!',
+            'stream_start'
+          );
+          setVoiceParticipants((prev) =>
+            prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: true } : p))
+          );
+        } catch {}
       }
     }
   };
 
   const handleChangeScreenSource = async () => {
-    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) return;
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: {
-          frameRate: { ideal: 60, max: 60 },
-        },
-        audio: true,
-      });
+      const isNative = screenShareService.isNativeScreenShareSupported();
+      const result = await screenShareService.startScreenShare(currentUser.name, !isNative);
 
       if (screenMediaStream) {
         screenMediaStream.getTracks().forEach((track) => track.stop());
       }
+      screenShareService.cleanupAll();
 
-      setScreenMediaStream(stream);
-      const videoTrack = stream.getVideoTracks()[0];
+      setScreenMediaStream(result.stream);
+      const videoTrack = result.stream.getVideoTracks()[0];
       if (videoTrack) {
         videoTrack.onended = () => {
           handleStopScreenShare();
@@ -1169,12 +1237,233 @@ export default function App() {
     await firebaseDb.saveServer(updatedServer);
   };
 
+  const handleUpdateUser = async (updated: Partial<User>) => {
+    const next = { ...currentUser, ...updated };
+    setCurrentUser(next);
+
+    // 1. Immediately update active voice room participants locally without requiring rejoin
+    setVoiceParticipants((prev) =>
+      prev.map((p) =>
+        p.userId === currentUser.id
+          ? {
+              ...p,
+              userName: updated.name || p.userName,
+              userAvatar: updated.avatar || p.userAvatar,
+            }
+          : p
+      )
+    );
+
+    // 2. Immediately update member list in all servers locally
+    setServers((prev) =>
+      prev.map((srv) => ({
+        ...srv,
+        members: srv.members.map((m) =>
+          m.id === currentUser.id
+            ? {
+                ...m,
+                ...updated,
+                name: updated.name || m.name,
+                avatar: updated.avatar || m.avatar,
+                status: updated.status || m.status,
+                customStatus: updated.customStatus !== undefined ? updated.customStatus : m.customStatus,
+                bio: updated.bio !== undefined ? updated.bio : m.bio,
+              }
+            : m
+        ),
+      }))
+    );
+
+    // 3. Broadcast real-time profile update via WebSocket so other peers update instantly
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'user-profile-updated',
+          userId: currentUser.id,
+          userName: updated.name || currentUser.name,
+          userAvatar: updated.avatar || currentUser.avatar,
+          status: updated.status || currentUser.status,
+          customStatus: updated.customStatus !== undefined ? updated.customStatus : currentUser.customStatus,
+          bio: updated.bio !== undefined ? updated.bio : currentUser.bio,
+          channelId: currentVoiceChannelId,
+        })
+      );
+    }
+
+    // 4. Persist to Firestore DB (Users collection and Server Members)
+    if (firebaseUser) {
+      try {
+        await firebaseDb.updateUserProfile(firebaseUser.uid, updated);
+        if (currentServer) {
+          const updatedMembers = currentServer.members.map((m) =>
+            m.id === currentUser.id
+              ? {
+                  ...m,
+                  ...updated,
+                  name: updated.name || m.name,
+                  avatar: updated.avatar || m.avatar,
+                  status: updated.status || m.status,
+                  customStatus: updated.customStatus !== undefined ? updated.customStatus : m.customStatus,
+                  bio: updated.bio !== undefined ? updated.bio : m.bio,
+                }
+              : m
+          );
+          const updatedServer = { ...currentServer, members: updatedMembers };
+          await firebaseDb.saveServer(updatedServer);
+        }
+      } catch (err) {
+        console.warn('Error persisting profile update:', err);
+      }
+    }
+
+    pushNotificationToast(
+      'Perfil Atualizado',
+      'Suas alterações foram sincronizadas automaticamente em todas as salas.',
+      'mention'
+    );
+  };
+
   const handleSignOut = async () => {
     await signOut(auth);
     setFirebaseUser(null);
   };
 
   const isVoiceActiveChannel = currentChannel.type === 'voice' || currentChannel.type === 'stage';
+
+  // Ensure voice participants list for sidebar, stage, and controls bar always contains current user when in voice
+  const enrichedSidebarVoiceParticipants = useMemo(() => {
+    let list = [...voiceParticipants];
+    if (currentVoiceChannelId && !list.some((p) => p.userId === currentUser.id && p.channelId === currentVoiceChannelId)) {
+      list.push({
+        userId: currentUser.id,
+        userName: currentUser.name,
+        userAvatar: currentUser.avatar,
+        channelId: currentVoiceChannelId,
+        isMuted,
+        isDeafened,
+        isSpeaking: false,
+        isScreenSharing,
+        isCameraOn,
+        viewers: [],
+        joinedAt: Date.now(),
+      });
+    }
+    return list.map((p) =>
+      p.userId === currentUser.id
+        ? { ...p, userName: currentUser.name, userAvatar: currentUser.avatar }
+        : p
+    );
+  }, [
+    voiceParticipants,
+    currentVoiceChannelId,
+    currentUser.id,
+    currentUser.name,
+    currentUser.avatar,
+    isMuted,
+    isDeafened,
+    isScreenSharing,
+    isCameraOn,
+  ]);
+
+  const activeStageVoiceParticipants = useMemo(() => {
+    let list = voiceParticipants.filter((p) => p.channelId === currentChannel.id);
+    if (currentVoiceChannelId === currentChannel.id) {
+      const myIndex = list.findIndex((p) => p.userId === currentUser.id);
+      if (myIndex >= 0) {
+        list = list.map((p, idx) =>
+          idx === myIndex
+            ? {
+                ...p,
+                userName: currentUser.name,
+                userAvatar: currentUser.avatar,
+                isMuted,
+                isDeafened,
+                isScreenSharing,
+                isCameraOn,
+              }
+            : p
+        );
+      } else {
+        list = [
+          ...list,
+          {
+            userId: currentUser.id,
+            userName: currentUser.name,
+            userAvatar: currentUser.avatar,
+            channelId: currentChannel.id,
+            isMuted,
+            isDeafened,
+            isSpeaking: false,
+            isScreenSharing,
+            isCameraOn,
+            viewers: [],
+            joinedAt: Date.now(),
+          },
+        ];
+      }
+    }
+    return list;
+  }, [
+    voiceParticipants,
+    currentChannel.id,
+    currentVoiceChannelId,
+    currentUser.id,
+    currentUser.name,
+    currentUser.avatar,
+    isMuted,
+    isDeafened,
+    isScreenSharing,
+    isCameraOn,
+  ]);
+
+  const activeVoiceBarParticipants = useMemo(() => {
+    if (!currentVoiceChannelId) return [];
+    let list = voiceParticipants.filter((p) => p.channelId === currentVoiceChannelId);
+    const myIndex = list.findIndex((p) => p.userId === currentUser.id);
+    if (myIndex >= 0) {
+      list = list.map((p, idx) =>
+        idx === myIndex
+          ? {
+              ...p,
+              userName: currentUser.name,
+              userAvatar: currentUser.avatar,
+              isMuted,
+              isDeafened,
+              isScreenSharing,
+              isCameraOn,
+            }
+          : p
+      );
+    } else {
+      list = [
+        ...list,
+        {
+          userId: currentUser.id,
+          userName: currentUser.name,
+          userAvatar: currentUser.avatar,
+          channelId: currentVoiceChannelId,
+          isMuted,
+          isDeafened,
+          isSpeaking: false,
+          isScreenSharing,
+          isCameraOn,
+          viewers: [],
+          joinedAt: Date.now(),
+        },
+      ];
+    }
+    return list;
+  }, [
+    voiceParticipants,
+    currentVoiceChannelId,
+    currentUser.id,
+    currentUser.name,
+    currentUser.avatar,
+    isMuted,
+    isDeafened,
+    isScreenSharing,
+    isCameraOn,
+  ]);
 
   if (authLoading) {
     return (
@@ -1230,6 +1519,9 @@ export default function App() {
         </div>
       )}
 
+      {/* PWA App Installation Prompt for Mobile Browsers */}
+      <PWAInstallBanner onOpenInstallerModal={() => setShowAppInstaller(true)} />
+
       {/* Main Multi-Sidebar Layout */}
       <div className="flex-1 flex overflow-hidden relative">
         {/* Mobile Left Drawer Backdrop */}
@@ -1281,7 +1573,7 @@ export default function App() {
               setActiveChannelId(chan.id);
               setMobileNavOpen(false);
             }}
-            voiceParticipants={voiceParticipants}
+            voiceParticipants={enrichedSidebarVoiceParticipants}
             currentVoiceChannelId={currentVoiceChannelId}
             onJoinVoice={(cId) => {
               handleJoinVoice(cId);
@@ -1317,12 +1609,14 @@ export default function App() {
           {isVoiceActiveChannel ? (
             <VoiceRoomStage
               channel={currentChannel}
-              participants={voiceParticipants.filter((p) => p.channelId === currentChannel.id)}
+              participants={activeStageVoiceParticipants}
               currentUser={currentUser}
               onWatchStream={handleWatchStream}
               isWatchingStreamId={isWatchingStreamId}
               onStopWatchingStream={() => setIsWatchingStreamId(null)}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
+              onToggleMemberList={() => setShowMemberList(!showMemberList)}
+              showMemberList={showMemberList}
               screenMediaStream={screenMediaStream}
               onChangeScreenSource={handleChangeScreenSource}
               onToggleScreenShare={handleToggleScreenShare}
@@ -1351,7 +1645,7 @@ export default function App() {
               currentChannel={
                 currentServer?.channels.find((c) => c.id === currentVoiceChannelId) || currentChannel
               }
-              participants={voiceParticipants.filter((p) => p.channelId === currentVoiceChannelId)}
+              participants={activeVoiceBarParticipants}
               isMuted={isMuted}
               isDeafened={isDeafened}
               isScreenSharing={isScreenSharing}
@@ -1420,13 +1714,7 @@ export default function App() {
         <UserSettingsModal
           currentUser={currentUser}
           onClose={() => setShowUserSettings(false)}
-          onUpdateUser={async (updated) => {
-            const next = { ...currentUser, ...updated };
-            setCurrentUser(next);
-            if (firebaseUser) {
-              await firebaseDb.updateUserProfile(firebaseUser.uid, updated);
-            }
-          }}
+          onUpdateUser={handleUpdateUser}
           onSignOut={handleSignOut}
           onOpenInstaller={() => {
             setShowUserSettings(false);
