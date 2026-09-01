@@ -6,16 +6,17 @@ import {
   Apple, 
   RefreshCw, 
   CheckCircle2, 
-  Sparkles, 
   ShieldCheck, 
-  ArrowUpCircle, 
   Zap, 
   Info,
   Check,
-  HardDrive,
-  Laptop
+  Laptop,
+  Copy,
+  ExternalLink,
+  AlertTriangle
 } from 'lucide-react';
 import { updateService, UpdateState } from '../../services/updateService';
+import { pwaInstallService, PwaState } from '../../services/pwaInstallService';
 
 interface AppInstallerModalProps {
   onClose: () => void;
@@ -26,27 +27,25 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
   const [activeTab, setActiveTab] = useState<'install' | 'update'>(initialTab);
   const [downloadingPlatform, setDownloadingPlatform] = useState<string | null>(null);
   const [updateState, setUpdateState] = useState<UpdateState>(updateService.getState());
-  const [pwaInstalledSuccess, setPwaInstalledSuccess] = useState(false);
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [pwaState, setPwaState] = useState<PwaState>(pwaInstallService.getState());
+  const [showManualGuide, setShowManualGuide] = useState(false);
+  const [copiedUrl, setCopiedUrl] = useState(false);
 
   const clientInfo = updateService.getClientInfo();
+  const installGuide = pwaInstallService.getInstallGuide();
 
   useEffect(() => {
-    const unsubscribe = updateService.subscribe((state) => {
+    const unsubUpdate = updateService.subscribe((state) => {
       setUpdateState(state);
     });
 
-    // Capture beforeinstallprompt if browser supports it
-    const handleBeforeInstallPrompt = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-
-    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    const unsubPwa = pwaInstallService.subscribe((state) => {
+      setPwaState(state);
+    });
 
     return () => {
-      unsubscribe();
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      unsubUpdate();
+      unsubPwa();
     };
   }, []);
 
@@ -74,21 +73,22 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
   };
 
   const handleInstallPWA = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt();
-      const { outcome } = await deferredPrompt.userChoice;
-      if (outcome === 'accepted') {
-        setPwaInstalledSuccess(true);
-      }
-      setDeferredPrompt(null);
-    } else {
-      // Show visual confirmation guide
-      setPwaInstalledSuccess(true);
+    const result = await pwaInstallService.promptInstall();
+    if (result === 'manual_required' || result === 'dismissed') {
+      setShowManualGuide(true);
+    }
+  };
+
+  const handleCopyUrl = async () => {
+    const ok = await pwaInstallService.copyAppUrl();
+    if (ok) {
+      setCopiedUrl(true);
+      setTimeout(() => setCopiedUrl(false), 2500);
     }
   };
 
   const handleCheckForUpdates = () => {
-    updateService.checkForUpdates(true);
+    updateService.checkForUpdates(false);
   };
 
   const handleApplyOTAUpdate = () => {
@@ -145,7 +145,7 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
               }`}
             >
               <Laptop className="w-3.5 h-3.5" />
-              <span>Instalar Aplicativo</span>
+              <span>Instalar Aplicativo (PWA)</span>
             </button>
 
             <button
@@ -170,7 +170,7 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
         <div className="p-4 sm:p-6 overflow-y-auto space-y-5 bg-[#0a0c12] custom-scrollbar flex-1">
           {activeTab === 'install' ? (
             <>
-              {/* Device Detected Banner */}
+              {/* Device & PWA Status Card */}
               <div className="bg-[#141722] border border-indigo-500/20 rounded-2xl p-3.5 flex items-center justify-between gap-3 text-xs">
                 <div className="flex items-center gap-2.5 min-w-0">
                   <div className="p-2 rounded-xl bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 shrink-0">
@@ -179,19 +179,113 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   <div className="min-w-0">
                     <p className="font-semibold text-white truncate">Dispositivo detectado: {clientInfo.os}</p>
                     <p className="text-[11px] text-slate-400 truncate">
-                      {clientInfo.isPWA ? 'Executando como PWA nativo instalado' : 'Ambiente Web - pronto para instalação'}
+                      {pwaState.isInstalled 
+                        ? '✓ Aplicativo já instalado e operando em modo nativo'
+                        : pwaState.canInstallDirectly 
+                          ? 'Pronto para instalação com 1 clique' 
+                          : 'Compatível com instalação via navegador'}
                     </p>
                   </div>
                 </div>
-                <span className="text-[10px] font-bold px-2 py-1 rounded-lg bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 shrink-0">
-                  Compatível
+                <span className={`text-[10px] font-bold px-2 py-1 rounded-lg shrink-0 ${
+                  pwaState.isInstalled
+                    ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30'
+                    : 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/30'
+                }`}>
+                  {pwaState.isInstalled ? 'Instalado' : 'Compatível'}
                 </span>
+              </div>
+
+              {/* Mobile & Web PWA Main Action Card */}
+              <div className="bg-gradient-to-br from-[#141722] to-[#1a1e2e] border border-indigo-500/30 rounded-2xl p-4 sm:p-5 flex flex-col gap-4 shadow-xl">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-start sm:items-center gap-3.5 min-w-0">
+                    <div className="p-3 bg-indigo-500/15 text-indigo-400 rounded-2xl shrink-0 border border-indigo-500/30 shadow-inner">
+                      <Smartphone className="w-6 h-6" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h4 className="text-sm font-bold text-white tracking-tight">
+                          Instalar Aplicativo Direto (PWA)
+                        </h4>
+                        <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">
+                          Sem Loja de Apps
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1 leading-relaxed font-normal">
+                        Adicione o Braza Talk à tela inicial do seu celular (Android / iOS) ou instale como app independente no seu computador.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
+                    <button
+                      id="btn-install-pwa-action"
+                      onClick={handleInstallPWA}
+                      className="flex-1 sm:flex-none bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold px-5 py-3 rounded-xl shadow-lg shadow-indigo-600/30 transition-all cursor-pointer flex items-center justify-center gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      <span>{pwaState.canInstallDirectly ? 'Instalar Agora (1 Clique)' : 'Instalar no Meu Aparelho'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* HTTP Notice if accessed on non-secure connection */}
+                {!pwaState.isSecureContext && (
+                  <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-xs text-amber-200 flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="text-[11px] leading-relaxed">
+                      <strong>Dica de Navegação:</strong> Conexões HTTP simples requerem adicionar manualmente pelo menu do navegador (<strong>⋮ ➔ Adicionar à tela inicial</strong> ou <strong>Instalar</strong>) ou acessar através de um domínio com <strong>HTTPS</strong>.
+                    </div>
+                  </div>
+                )}
+
+                {/* Step-by-Step Installation Guide (Platform tailored) */}
+                <div className="p-4 rounded-xl bg-black/40 border border-white/[0.06] text-xs space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-bold text-white">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                      <span>{installGuide.title}</span>
+                    </div>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-md bg-white/10 text-slate-300">
+                      {installGuide.badge}
+                    </span>
+                  </div>
+
+                  <ol className="list-decimal pl-5 space-y-1.5 text-slate-300 text-[11px]">
+                    {installGuide.steps.map((step, idx) => (
+                      <li key={idx} className="leading-relaxed">{step}</li>
+                    ))}
+                  </ol>
+
+                  <div className="pt-2 flex items-center gap-2 flex-wrap">
+                    <button
+                      id="btn-copy-app-link"
+                      onClick={handleCopyUrl}
+                      className="px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/15 text-white text-[11px] font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5 text-slate-400" />}
+                      <span>{copiedUrl ? 'Link Copiado!' : 'Copiar Link Direto'}</span>
+                    </button>
+                    {pwaState.isIframe && (
+                      <a
+                        href={pwaState.appUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-[11px] font-semibold flex items-center gap-1.5 transition-colors"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                        <span>Abrir em Nova Aba</span>
+                      </a>
+                    )}
+                  </div>
+                </div>
               </div>
 
               {/* Desktop Platforms Grid */}
               <div>
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
-                  Instaladores para Desktop
+                  Pacotes para Desktop (Atalhos & Standalone)
                 </h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
                   {/* Windows */}
@@ -237,51 +331,6 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   </button>
                 </div>
               </div>
-
-              {/* Mobile PWA & Push Notifications Card */}
-              <div className="bg-[#141722] border border-white/[0.08] rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-lg">
-                <div className="flex items-start sm:items-center gap-3.5 min-w-0">
-                  <div className="p-3 bg-indigo-500/10 text-indigo-400 rounded-2xl shrink-0 border border-indigo-500/20">
-                    <Smartphone className="w-6 h-6" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h4 className="text-sm font-bold text-white tracking-tight">
-                        Aplicativo Mobile (PWA & Android/iOS)
-                      </h4>
-                      <span className="text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-bold">
-                        Offline & Push
-                      </span>
-                    </div>
-                    <p className="text-xs text-slate-400 mt-1 leading-relaxed font-normal">
-                      Instale no seu celular sem precisar de loja de aplicativos. O app recebe atualizações automáticas em segundo plano via tecnologia OTA.
-                    </p>
-                  </div>
-                </div>
-
-                <button
-                  id="btn-install-pwa"
-                  onClick={handleInstallPWA}
-                  className="w-full sm:w-auto bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl whitespace-nowrap shadow-md shadow-indigo-600/30 transition-all shrink-0 cursor-pointer flex items-center justify-center gap-2"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>Instalar PWA</span>
-                </button>
-              </div>
-
-              {/* PWA Instruction Guide */}
-              {pwaInstalledSuccess && (
-                <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 space-y-2">
-                  <div className="flex items-center gap-2 font-bold text-emerald-400">
-                    <CheckCircle2 className="w-4 h-4" />
-                    <span>Como concluir a instalação no seu navegador:</span>
-                  </div>
-                  <ul className="list-disc pl-5 space-y-1 text-slate-300 text-[11px]">
-                    <li><strong>No Chrome / Edge (Desktop/Android):</strong> Clique no ícone de computador/instalação na barra de endereço ou toque nos três pontinhos e selecione <em>"Instalar Braza Talk"</em> ou <em>"Adicionar à tela inicial"</em>.</li>
-                    <li><strong>No Safari (iPhone/iPad):</strong> Toque no botão de Compartilhar (ícone de quadrado com seta para cima) e escolha <em>"Adicionar à Tela de Início"</em>.</li>
-                  </ul>
-                </div>
-              )}
             </>
           ) : (
             /* TAB: UPDATE SYSTEM (OTA) */
@@ -295,22 +344,24 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                     </span>
                     <div className="flex items-center gap-2.5 mt-1">
                       <span className="text-xl sm:text-2xl font-black text-white">v{updateState.currentVersion}</span>
-                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-semibold flex items-center gap-1">
+                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-semibold flex items-center gap-1">
                         <Check className="w-3 h-3" />
                         Canal Estável
                       </span>
                     </div>
                   </div>
 
-                  <button
-                    id="btn-check-updates-now"
-                    onClick={handleCheckForUpdates}
-                    disabled={updateState.isChecking || updateState.isDownloading}
-                    className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-xs font-bold transition-all border border-white/10 cursor-pointer disabled:opacity-50"
-                  >
-                    <RefreshCw className={`w-3.5 h-3.5 ${updateState.isChecking ? 'animate-spin' : ''}`} />
-                    <span>{updateState.isChecking ? 'Buscando...' : 'Verificar Atualizações'}</span>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      id="btn-check-updates-now"
+                      onClick={handleCheckForUpdates}
+                      disabled={updateState.isChecking || updateState.isDownloading}
+                      className="flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/20 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${updateState.isChecking ? 'animate-spin' : ''}`} />
+                      <span>{updateState.isChecking ? 'Verificando...' : 'Verificar Atualizações'}</span>
+                    </button>
+                  </div>
                 </div>
 
                 <div className="pt-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-400">
@@ -320,11 +371,37 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   </div>
                   {updateState.lastChecked && (
                     <span className="text-[11px] text-slate-500">
-                      Última verificação: {new Date(updateState.lastChecked).toLocaleTimeString('pt-BR')}
+                      Última checagem: {new Date(updateState.lastChecked).toLocaleTimeString('pt-BR')}
                     </span>
                   )}
                 </div>
               </div>
+
+              {/* Status: Already Up to Date */}
+              {!updateState.updateAvailable && (
+                <div className="bg-[#141722] border border-emerald-500/20 rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 shrink-0">
+                      <ShieldCheck className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-white">Aplicativo 100% Atualizado</h4>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Você está utilizando os recursos mais recentes de áudio HD, PWA e criptografia E2EE.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    id="btn-force-refresh-ota"
+                    onClick={handleApplyOTAUpdate}
+                    disabled={updateState.isDownloading}
+                    className="text-xs font-bold px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 border border-white/10 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    Revalidar Cache OTA
+                  </button>
+                </div>
+              )}
 
               {/* Available Update Card */}
               {updateState.updateAvailable && updateState.releaseInfo && (

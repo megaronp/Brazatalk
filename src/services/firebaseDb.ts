@@ -14,6 +14,30 @@ import {
 } from './firebase';
 import { Server, Message, User, Permission, ChannelType } from '../types';
 
+/**
+ * Recursively strips undefined fields from an object/array so Firestore setDoc/updateDoc never rejects it.
+ */
+function sanitizeFirestoreData<T>(obj: T): T {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+  if (Array.isArray(obj)) {
+    return obj
+      .filter((item) => item !== undefined)
+      .map((item) => sanitizeFirestoreData(item)) as unknown as T;
+  }
+  if (typeof obj === 'object' && !(obj instanceof Date)) {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleaned[key] = sanitizeFirestoreData(value);
+      }
+    }
+    return cleaned as T;
+  }
+  return obj;
+}
+
 export const firebaseDb = {
   // Listen to all servers the user is a member of or owns, or public servers
   subscribeToServers(userId: string, callback: (servers: Server[]) => void) {
@@ -32,7 +56,8 @@ export const firebaseDb = {
   // Save or update server
   async saveServer(server: Server) {
     const serverRef = doc(db, 'servers', server.id);
-    await setDoc(serverRef, server, { merge: true });
+    const cleaned = sanitizeFirestoreData(server);
+    await setDoc(serverRef, cleaned, { merge: true });
   },
 
   // Delete server
@@ -61,13 +86,15 @@ export const firebaseDb = {
   // Send a message
   async sendMessage(message: Message) {
     const msgRef = doc(db, 'messages', message.id);
-    await setDoc(msgRef, message);
+    const cleaned = sanitizeFirestoreData(message);
+    await setDoc(msgRef, cleaned);
   },
 
   // Update a message (e.g. edit, reactions, pin)
   async updateMessage(messageId: string, updates: Partial<Message>) {
     const msgRef = doc(db, 'messages', messageId);
-    await updateDoc(msgRef, updates);
+    const cleaned = sanitizeFirestoreData(updates);
+    await updateDoc(msgRef, cleaned as Record<string, any>);
   },
 
   // Delete a message
@@ -78,7 +105,8 @@ export const firebaseDb = {
   // User Profile
   async updateUserProfile(userId: string, updates: Partial<User>) {
     const userRef = doc(db, 'users', userId);
-    await setDoc(userRef, updates, { merge: true });
+    const cleaned = sanitizeFirestoreData(updates);
+    await setDoc(userRef, cleaned, { merge: true });
   },
 
   // Fetch or seed default community server if none exists

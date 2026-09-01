@@ -76,6 +76,7 @@ export default function App() {
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isWatchingStreamId, setIsWatchingStreamId] = useState<string | null>(null);
+  const [screenMediaStream, setScreenMediaStream] = useState<MediaStream | null>(null);
 
   // Modals
   const [showServerSettings, setShowServerSettings] = useState(false);
@@ -130,9 +131,17 @@ export default function App() {
           joinedAt: userData?.createdAt || Date.now(),
           e2eePublicKey: `E2EE-PUB-${user.uid.slice(0, 8)}`,
           e2eeFingerprint: e2eeService.getFingerprint(),
+          voiceInputMode: userData?.voiceInputMode || 'open',
+          pttKey: userData?.pttKey || 'Space',
+          pttReleaseDelay: userData?.pttReleaseDelay ?? 200,
         };
 
         setCurrentUser(appUser);
+
+        // If PTT mode is enabled, initially start muted until key is held
+        if (appUser.voiceInputMode === 'ptt') {
+          setIsMuted(true);
+        }
 
         // Check and bootstrap default server if empty
         const initialServer = await firebaseDb.initializeDefaultServerIfEmpty(appUser);
@@ -253,6 +262,20 @@ export default function App() {
   // Handle incoming WebSocket broadcasts (Voice & Signals)
   const handleIncomingWSEvent = (data: any) => {
     switch (data.type) {
+      case 'init-voice-state': {
+        if (data.participants && Array.isArray(data.participants)) {
+          setVoiceParticipants(data.participants);
+        }
+        break;
+      }
+
+      case 'voice-state-changed': {
+        setVoiceParticipants((prev) =>
+          prev.map((p) => (p.userId === data.userId ? { ...p, ...data.updates } : p))
+        );
+        break;
+      }
+
       case 'voice-user-joined': {
         setVoiceParticipants((prev) => {
           const filtered = prev.filter((p) => p.userId !== data.user.userId);
@@ -308,6 +331,217 @@ export default function App() {
     }
   };
 
+  // Open Microphone Voice Activity Detection (VAD)
+  const vadQuietTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isSpeakingRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    // Only active in Open Mic mode, connected to voice channel, and not muted/deafened
+    if (currentUser.voiceInputMode === 'ptt' || !currentVoiceChannelId || isMuted || isDeafened) {
+      if (isSpeakingRef.current) {
+        isSpeakingRef.current = false;
+        setVoiceParticipants((prev) =>
+          prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
+        );
+        if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'voice-state-update',
+              channelId: currentVoiceChannelId,
+              userId: currentUser.id,
+              isSpeaking: false,
+            })
+          );
+        }
+      }
+      return;
+    }
+
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let micStream: MediaStream | null = null;
+    let checkInterval: NodeJS.Timeout | null = null;
+
+    const startVAD = async () => {
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+
+        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 256;
+        const source = audioCtx.createMediaStreamSource(micStream);
+        source.connect(analyser);
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+        checkInterval = setInterval(() => {
+          if (!analyser) return;
+          analyser.getByteFrequencyData(dataArray);
+
+          let sum = 0;
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+          }
+          const avg = sum / dataArray.length;
+
+          // Threshold: if average volume is above 10 (out of 255)
+          if (avg > 10) {
+            if (vadQuietTimeoutRef.current) {
+              clearTimeout(vadQuietTimeoutRef.current);
+              vadQuietTimeoutRef.current = null;
+            }
+
+            if (!isSpeakingRef.current) {
+              isSpeakingRef.current = true;
+              setVoiceParticipants((prev) =>
+                prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: true } : p))
+              );
+
+              if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+                wsRef.current.send(
+                  JSON.stringify({
+                    type: 'voice-state-update',
+                    channelId: currentVoiceChannelId,
+                    userId: currentUser.id,
+                    isSpeaking: true,
+                  })
+                );
+              }
+            }
+          } else {
+            // Silence detected: wait 350ms before marking as quiet
+            if (isSpeakingRef.current && !vadQuietTimeoutRef.current) {
+              vadQuietTimeoutRef.current = setTimeout(() => {
+                isSpeakingRef.current = false;
+                vadQuietTimeoutRef.current = null;
+                setVoiceParticipants((prev) =>
+                  prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
+                );
+
+                if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+                  wsRef.current.send(
+                    JSON.stringify({
+                      type: 'voice-state-update',
+                      channelId: currentVoiceChannelId,
+                      userId: currentUser.id,
+                      isSpeaking: false,
+                    })
+                  );
+                }
+              }, 350);
+            }
+          }
+        }, 70);
+      } catch (err) {
+        console.warn('VAD mic init info/permission:', err);
+      }
+    };
+
+    startVAD();
+
+    return () => {
+      if (checkInterval) clearInterval(checkInterval);
+      if (vadQuietTimeoutRef.current) clearTimeout(vadQuietTimeoutRef.current);
+      if (micStream) micStream.getTracks().forEach((t) => t.stop());
+      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
+      if (isSpeakingRef.current) {
+        isSpeakingRef.current = false;
+        setVoiceParticipants((prev) =>
+          prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
+        );
+      }
+    };
+  }, [currentUser.voiceInputMode, currentVoiceChannelId, isMuted, isDeafened, currentUser.id]);
+
+  // Push-to-Talk (PTT) Global Key Listener
+  const pttReleaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (currentUser.voiceInputMode !== 'ptt' || !currentVoiceChannelId) return;
+
+    const pttKeyTarget = currentUser.pttKey || 'Space';
+    const releaseDelay = currentUser.pttReleaseDelay ?? 200;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore if typing in text inputs or textareas
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+
+      const pressedKey = e.code || e.key;
+      if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
+        if (pttReleaseTimeoutRef.current) {
+          clearTimeout(pttReleaseTimeoutRef.current);
+          pttReleaseTimeoutRef.current = null;
+        }
+
+        // Unmute and mark speaking when key is held
+        setIsMuted(false);
+        setVoiceParticipants((prev) =>
+          prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: false, isSpeaking: true } : p))
+        );
+
+        if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'voice-state-update',
+              channelId: currentVoiceChannelId,
+              userId: currentUser.id,
+              isMuted: false,
+              isSpeaking: true,
+            })
+          );
+        }
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const pressedKey = e.code || e.key;
+      if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
+        if (pttReleaseTimeoutRef.current) {
+          clearTimeout(pttReleaseTimeoutRef.current);
+        }
+
+        pttReleaseTimeoutRef.current = setTimeout(() => {
+          setIsMuted(true);
+          setVoiceParticipants((prev) =>
+            prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: true, isSpeaking: false } : p))
+          );
+
+          if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'voice-state-update',
+                channelId: currentVoiceChannelId,
+                userId: currentUser.id,
+                isMuted: true,
+                isSpeaking: false,
+              })
+            );
+          }
+        }, releaseDelay);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      if (pttReleaseTimeoutRef.current) {
+        clearTimeout(pttReleaseTimeoutRef.current);
+      }
+    };
+  }, [currentUser.voiceInputMode, currentUser.pttKey, currentUser.pttReleaseDelay, currentVoiceChannelId, currentUser.id]);
+
   const pushNotificationToast = (
     title: string,
     body: string,
@@ -342,7 +576,7 @@ export default function App() {
     const newMsg: Message = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       channelId: currentChannel.id,
-      serverId: currentServer?.id,
+      serverId: currentServer?.id || '',
       authorId: currentUser.id,
       userId: currentUser.id,
       authorName: currentUser.name,
@@ -354,8 +588,8 @@ export default function App() {
       attachments: attachments || [],
       reactions: [],
       timestamp: Date.now(),
-      isVoiceNote,
-      voiceDuration,
+      isVoiceNote: !!isVoiceNote,
+      ...(voiceDuration !== undefined ? { voiceDuration } : {}),
       pendingSync: !isOnline,
     };
 
@@ -571,9 +805,38 @@ export default function App() {
     }
   };
 
+  const handleStopScreenShare = () => {
+    if (screenMediaStream) {
+      screenMediaStream.getTracks().forEach((track) => track.stop());
+      setScreenMediaStream(null);
+    }
+    setIsScreenSharing(false);
+    soundEngine.playScreenShareEnd();
+
+    setVoiceParticipants((prev) =>
+      prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: false } : p))
+    );
+
+    if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+      wsRef.current.send(
+        JSON.stringify({
+          type: 'stop-screen-share',
+          channelId: currentVoiceChannelId,
+          userId: currentUser.id,
+          userName: currentUser.name,
+        })
+      );
+    }
+  };
+
   const handleLeaveVoice = () => {
     if (!currentVoiceChannelId) return;
     soundEngine.playUserLeave();
+
+    if (screenMediaStream) {
+      screenMediaStream.getTracks().forEach((track) => track.stop());
+      setScreenMediaStream(null);
+    }
 
     setVoiceParticipants((prev) => prev.filter((p) => p.userId !== currentUser.id));
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -622,36 +885,111 @@ export default function App() {
     setVoiceParticipants((prev) =>
       prev.map((p) => (p.userId === currentUser.id ? { ...p, isDeafened: nextDeafened } : p))
     );
-  };
-
-  const handleToggleScreenShare = async () => {
-    const nextSharing = !isScreenSharing;
-    setIsScreenSharing(nextSharing);
-
-    if (nextSharing) {
-      soundEngine.playScreenShareStart();
-      pushNotificationToast(
-        'Você iniciou a transmissão',
-        'Sua tela está sendo compartilhada em 60FPS com áudio HD.',
-        'stream_start'
-      );
-    } else {
-      soundEngine.playScreenShareEnd();
-    }
-
-    setVoiceParticipants((prev) =>
-      prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: nextSharing } : p))
-    );
 
     if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
       wsRef.current.send(
         JSON.stringify({
-          type: nextSharing ? 'start-screen-share' : 'stop-screen-share',
+          type: 'voice-state-update',
           channelId: currentVoiceChannelId,
           userId: currentUser.id,
-          userName: currentUser.name,
+          isDeafened: nextDeafened,
         })
       );
+    }
+  };
+
+  const handleToggleScreenShare = async () => {
+    if (isScreenSharing) {
+      handleStopScreenShare();
+      return;
+    }
+
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) {
+      pushNotificationToast(
+        'Captura de Tela Indisponível',
+        'Seu navegador atual não suporta a API de seleção nativa de janelas/telas.',
+        'message'
+      );
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 60, max: 60 },
+        },
+        audio: true,
+      });
+
+      setScreenMediaStream(stream);
+      setIsScreenSharing(true);
+      soundEngine.playScreenShareStart();
+      pushNotificationToast(
+        'Transmissão ao Vivo Iniciada',
+        'Sua tela selecionada está sendo compartilhada em 60FPS HD.',
+        'stream_start'
+      );
+
+      // Listen for when the user clicks the browser's native floating "Stop sharing" bar
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          handleStopScreenShare();
+        };
+      }
+
+      setVoiceParticipants((prev) =>
+        prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: true } : p))
+      );
+
+      if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: 'start-screen-share',
+            channelId: currentVoiceChannelId,
+            userId: currentUser.id,
+            userName: currentUser.name,
+          })
+        );
+      }
+    } catch (err: any) {
+      // User cancelled picker dialog or denied permission
+      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+        console.warn('Screen share error:', err);
+        pushNotificationToast(
+          'Erro ao Compartilhar Tela',
+          `Não foi possível iniciar a captura: ${err.message || 'Verifique as permissões'}`,
+          'message'
+        );
+      }
+    }
+  };
+
+  const handleChangeScreenSource = async () => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getDisplayMedia) return;
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: {
+          frameRate: { ideal: 60, max: 60 },
+        },
+        audio: true,
+      });
+
+      if (screenMediaStream) {
+        screenMediaStream.getTracks().forEach((track) => track.stop());
+      }
+
+      setScreenMediaStream(stream);
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          handleStopScreenShare();
+        };
+      }
+    } catch (err: any) {
+      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+        console.warn('Change screen error:', err);
+      }
     }
   };
 
@@ -977,6 +1315,9 @@ export default function App() {
               isWatchingStreamId={isWatchingStreamId}
               onStopWatchingStream={() => setIsWatchingStreamId(null)}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
+              screenMediaStream={screenMediaStream}
+              onChangeScreenSource={handleChangeScreenSource}
+              onToggleScreenShare={handleToggleScreenShare}
             />
           ) : (
             <ChatArea

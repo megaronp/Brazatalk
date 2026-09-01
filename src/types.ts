@@ -48,6 +48,10 @@ export interface User {
   joinedAt: number;
   e2eePublicKey?: string;
   e2eeFingerprint?: string;
+  // Voice Input Settings
+  voiceInputMode?: 'open' | 'ptt'; // 'open' (Voz Aberta / Detecção Contínua) or 'ptt' (Push to Talk / Pressione para Falar)
+  pttKey?: string; // Key code or name e.g. 'Space', 'KeyV', 'ControlLeft', 'AltLeft'
+  pttReleaseDelay?: number; // Release delay in ms (default 200)
 }
 
 export interface Channel {

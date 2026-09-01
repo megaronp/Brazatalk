@@ -17,6 +17,7 @@ import {
   UserPlus,
   Sliders,
   VolumeX,
+  Video,
 } from 'lucide-react';
 
 interface ChannelNavProps {
@@ -256,32 +257,65 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                             {participantsInChannel.map((participant) => (
                               <div
                                 key={participant.userId}
-                                className="flex items-center justify-between py-1 px-2 rounded-lg hover:bg-white/[0.04] text-xs text-slate-300"
+                                className={`flex items-center justify-between py-1 px-2 rounded-lg transition-colors text-xs ${
+                                  participant.isSpeaking
+                                    ? 'bg-emerald-500/10 text-emerald-300 font-medium'
+                                    : 'hover:bg-white/[0.04] text-slate-300'
+                                }`}
                               >
                                 <div className="flex items-center gap-2 min-w-0">
                                   <div className="relative">
                                     <img
                                       src={participant.userAvatar}
                                       alt={participant.userName}
-                                      className={`w-5 h-5 rounded-full object-cover ${
-                                        participant.isSpeaking ? 'ring-2 ring-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]' : ''
+                                      className={`w-5 h-5 rounded-full object-cover transition-all ${
+                                        participant.isSpeaking
+                                          ? 'ring-2 ring-emerald-400 ring-offset-1 ring-offset-[#0d1017] shadow-[0_0_10px_rgba(52,211,153,0.85)] scale-105'
+                                          : 'opacity-85'
                                       }`}
                                     />
+                                    {participant.isSpeaking && (
+                                      <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-emerald-400 rounded-full ring-1 ring-black animate-ping" />
+                                    )}
                                   </div>
                                   <span className="truncate text-xs font-medium">{participant.userName}</span>
                                 </div>
 
-                                <div className="flex items-center gap-1 text-slate-400">
+                                <div className="flex items-center gap-1.5 text-slate-400 shrink-0">
                                   {participant.isScreenSharing && (
                                     <span
-                                      title="Transmitindo tela"
-                                      className="flex items-center gap-0.5 text-[9px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold"
+                                      title="Transmitindo tela ao vivo"
+                                      className="flex items-center gap-0.5 text-[9px] bg-indigo-600 text-white px-1.5 py-0.5 rounded font-bold shadow-sm"
                                     >
                                       <Tv className="w-2.5 h-2.5" /> AO VIVO
                                     </span>
                                   )}
-                                  {participant.isMuted && <MicOff className="w-3 h-3 text-rose-400" />}
-                                  {participant.isDeafened && <VolumeX className="w-3 h-3 text-rose-400" />}
+
+                                  {participant.isCameraOn && (
+                                    <span title="Câmera ligada">
+                                      <Video className="w-3 h-3 text-cyan-400" />
+                                    </span>
+                                  )}
+
+                                  {participant.isSpeaking ? (
+                                    <span title="Falando agora">
+                                      <Volume2 className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
+                                    </span>
+                                  ) : participant.isMuted ? (
+                                    <span title="Microfone silenciado (Mutado)">
+                                      <MicOff className="w-3 h-3 text-rose-400" />
+                                    </span>
+                                  ) : (
+                                    <span title="Microfone aberto">
+                                      <Mic className="w-3 h-3 text-emerald-400/70" />
+                                    </span>
+                                  )}
+
+                                  {participant.isDeafened && (
+                                    <span title="Áudio desativado / bloqueado (Surdo)">
+                                      <VolumeX className="w-3 h-3 text-amber-400" />
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                             ))}
