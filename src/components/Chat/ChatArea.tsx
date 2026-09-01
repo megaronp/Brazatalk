@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   X,
   Menu,
+  UserPlus,
 } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
@@ -28,6 +29,7 @@ interface ChatAreaProps {
   showMemberList: boolean;
   onOpenE2EESecurityModal: () => void;
   onToggleMobileNav?: () => void;
+  onOpenInvite?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -42,6 +44,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   showMemberList,
   onOpenE2EESecurityModal,
   onToggleMobileNav,
+  onOpenInvite,
 }) => {
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -123,8 +126,20 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           )}
         </div>
 
-        {/* Right: Actions (Pinned, Notifications, Member list toggle, Search) */}
+        {/* Right: Actions (Pinned, Invite, Member list toggle, Search) */}
         <div className="flex items-center gap-1.5 text-slate-400">
+          {onOpenInvite && (
+            <button
+              id="btn-chat-invite-header"
+              onClick={onOpenInvite}
+              title={`Convidar amigos para #${channel.name}`}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-600/20 hover:bg-indigo-600 text-indigo-300 hover:text-white border border-indigo-500/30 text-xs font-semibold transition-all cursor-pointer mr-1"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Convidar</span>
+            </button>
+          )}
+
           {/* Pinned Messages Toggle */}
           <button
             id="btn-toggle-pinned-messages"

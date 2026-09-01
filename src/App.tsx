@@ -19,6 +19,7 @@ import { ServerSettingsModal } from './components/Modals/ServerSettingsModal';
 import { UserSettingsModal } from './components/Modals/UserSettingsModal';
 import { AppInstallerModal } from './components/Modals/AppInstallerModal';
 import { CreateServerOrChannelModal } from './components/Modals/CreateServerOrChannelModal';
+import { InviteModal } from './components/Modals/InviteModal';
 import { AuthModal } from './components/Modals/AuthModal';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { NotificationToast } from './components/Common/NotificationToast';
@@ -82,6 +83,9 @@ export default function App() {
   const [showServerSettings, setShowServerSettings] = useState(false);
   const [showUserSettings, setShowUserSettings] = useState(false);
   const [showAppInstaller, setShowAppInstaller] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState<{ open: boolean; channelId?: string }>({
+    open: false,
+  });
   const [appInstallerTab, setAppInstallerTab] = useState<'install' | 'update'>('install');
   const [updateInfo, setUpdateInfo] = useState<UpdateState>(updateService.getState());
   const [createModal, setCreateModal] = useState<{ open: boolean; mode: 'server' | 'channel'; categoryId?: string }>({
@@ -1292,6 +1296,10 @@ export default function App() {
               setMobileNavOpen(false);
               setCreateModal({ open: true, mode: 'channel', categoryId: catId });
             }}
+            onOpenInvite={(cId) => {
+              setMobileNavOpen(false);
+              setShowInviteModal({ open: true, channelId: cId });
+            }}
             currentUser={currentUser}
             onOpenUserSettings={() => {
               setMobileNavOpen(false);
@@ -1318,6 +1326,7 @@ export default function App() {
               screenMediaStream={screenMediaStream}
               onChangeScreenSource={handleChangeScreenSource}
               onToggleScreenShare={handleToggleScreenShare}
+              onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
             />
           ) : (
             <ChatArea
@@ -1332,6 +1341,7 @@ export default function App() {
               showMemberList={showMemberList}
               onOpenE2EESecurityModal={() => setShowUserSettings(true)}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
+              onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
             />
           )}
 
@@ -1439,6 +1449,32 @@ export default function App() {
           onClose={() => setCreateModal({ open: false, mode: 'server' })}
           onCreateServer={handleCreateServer}
           onCreateChannel={handleCreateChannel}
+        />
+      )}
+
+      {showInviteModal.open && (
+        <InviteModal
+          server={currentServer}
+          channel={
+            showInviteModal.channelId
+              ? currentServer?.channels.find((c) => c.id === showInviteModal.channelId) || currentChannel
+              : currentChannel
+          }
+          currentUser={currentUser}
+          onClose={() => setShowInviteModal({ open: false })}
+          onSendDirectInvite={(targetUserName, channelName) => {
+            const newNotif: NotificationItem = {
+              id: `notif-${Date.now()}`,
+              title: 'Convite Enviado!',
+              body: `Convite para o canal #${channelName} enviado para ${targetUserName}.`,
+              type: 'mention',
+              timestamp: Date.now(),
+              channelId: showInviteModal.channelId || currentChannel.id,
+              serverId: currentServer?.id,
+              read: false,
+            };
+            setNotifications((prev) => [newNotif, ...prev.slice(0, 4)]);
+          }}
         />
       )}
     </div>

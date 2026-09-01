@@ -20,6 +20,7 @@ import {
   VideoOff,
   Headphones,
   Sliders,
+  UserPlus,
 } from 'lucide-react';
 import { soundEngine } from '../../services/soundEngine';
 
@@ -34,6 +35,7 @@ interface VoiceRoomStageProps {
   screenMediaStream?: MediaStream | null;
   onChangeScreenSource?: () => void;
   onToggleScreenShare?: () => void;
+  onOpenInvite?: () => void;
 }
 
 export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
@@ -47,6 +49,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
   screenMediaStream,
   onChangeScreenSource,
   onToggleScreenShare,
+  onOpenInvite,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -105,7 +108,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
     }
   }, [screenMediaStream, streamer]);
 
-  // Fallback Animated Screen Visualizer (when viewing remote stream or demo)
+  // Fallback Animated Screen Visualizer
   useEffect(() => {
     if (!streamer || screenMediaStream || !screenCanvasRef.current) return;
     const canvas = screenCanvasRef.current;
@@ -120,7 +123,6 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
       ctx.fillStyle = '#06070a';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      // Draw simulated code IDE & real-time stream visualizer
       ctx.fillStyle = '#0e111a';
       ctx.fillRect(20, 20, canvas.width - 40, canvas.height - 40);
 
@@ -142,7 +144,6 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
       ctx.font = '12px "JetBrains Mono", monospace';
       ctx.fillText(`Transmissão de ${streamer.userName} - 60FPS Live HD (E2EE)`, 90, 42);
 
-      // Code Lines simulation
       const codeLines = [
         'import { RealTimeVoiceStream, E2EESecurity } from "@brazatalk/core";',
         'const stream = new RealTimeVoiceStream({ codec: "opus-hd", bitrate: 384000 });',
@@ -158,7 +159,6 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
         ctx.fillText(line, 40, y);
       });
 
-      // Animated audio frequency bars in stream
       ctx.fillStyle = isStreamMuted ? '#475569' : '#6366f1';
       const volMultiplier = isStreamMuted ? 0 : streamVolume / 100;
       for (let i = 0; i < 28; i++) {
@@ -205,9 +205,8 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
       className="flex-1 bg-[#090b10] flex flex-col overflow-hidden relative select-none p-3 sm:p-4"
     >
       {/* Stage Header */}
-      <div className="flex items-center justify-between mb-3 md:mb-4 bg-[#121520]/80 backdrop-blur-xl px-3 sm:px-4 py-2.5 rounded-2xl border border-white/[0.08] shadow-lg shrink-0">
+      <div className="flex items-center justify-between mb-3 bg-[#121520]/90 backdrop-blur-xl px-3.5 sm:px-4 py-2.5 rounded-2xl border border-white/[0.08] shadow-lg shrink-0">
         <div className="flex items-center gap-2.5 min-w-0">
-          {/* Mobile menu toggle */}
           {onToggleMobileNav && (
             <button
               id="btn-voice-mobile-menu-toggle"
@@ -232,16 +231,28 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
               )}
             </h2>
             <p className="text-[11px] sm:text-xs text-slate-400 font-normal truncate">
-              {streamer ? `Transmitindo tela: ${streamer.userName}` : channel.topic || 'Sala de voz e conferência'}
+              {participants.length} {participants.length === 1 ? 'membro na sala' : 'membros na sala'}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+          {onOpenInvite && (
+            <button
+              id="btn-stage-invite"
+              onClick={onOpenInvite}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/20 cursor-pointer"
+              title="Convidar amigos para este canal de voz"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Convidar</span>
+            </button>
+          )}
+
           {streamer && (
             <div className="flex items-center gap-1.5 bg-rose-600 text-white text-[11px] sm:text-xs font-bold px-2.5 sm:px-3 py-1 sm:py-1.5 rounded-xl shadow-md shadow-rose-600/30 animate-pulse">
               <Tv className="w-3.5 h-3.5" />
-              <span>AO VIVO 60FPS</span>
+              <span>AO VIVO</span>
             </div>
           )}
 
@@ -256,12 +267,11 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
         </div>
       </div>
 
-      {/* Main Content: Streamer View or Grid */}
-      <div className="flex-1 flex flex-col lg:flex-row gap-4 overflow-hidden">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col gap-3 overflow-hidden">
         {/* If someone is sharing screen */}
-        {streamer ? (
-          <div className="flex-[3] bg-[#06070a] rounded-2xl border border-white/10 flex flex-col overflow-hidden relative shadow-2xl group min-h-[300px]">
-            {/* Real Video Stream if local or fallback canvas */}
+        {streamer && (
+          <div className="flex-[3] bg-[#06070a] rounded-2xl border border-white/10 flex flex-col overflow-hidden relative shadow-2xl group min-h-[220px] max-h-[60vh]">
             {screenMediaStream ? (
               <video
                 ref={videoRef}
@@ -296,7 +306,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
               </div>
             </div>
 
-            {/* Stream Bottom Floating Action Controls */}
+            {/* Stream Bottom Controls */}
             <div className="absolute bottom-3 sm:bottom-4 right-3 sm:right-4 flex items-center gap-2 flex-wrap">
               {/* Stream Volume Control */}
               <div className="relative">
@@ -316,7 +326,6 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                   <span>{isStreamMuted ? 'Mudo' : `${streamVolume}%`}</span>
                 </button>
 
-                {/* Popover volume slider for the stream */}
                 {showStreamVolumeSlider && (
                   <div className="absolute bottom-full right-0 mb-2 p-3 bg-[#121520]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl w-56 flex flex-col gap-2 z-30">
                     <div className="flex items-center justify-between text-xs">
@@ -330,7 +339,6 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                       <button
                         id="btn-stream-quick-mute"
                         onClick={() => setIsStreamMuted((prev) => !prev)}
-                        title={isStreamMuted ? 'Desmutar Transmissão' : 'Mutar Transmissão'}
                         className={`p-1.5 rounded-lg border transition-colors ${
                           isStreamMuted
                             ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
@@ -355,17 +363,10 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                         className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-white/10 rounded-lg appearance-none"
                       />
                     </div>
-
-                    <div className="flex justify-between text-[10px] text-slate-400">
-                      <span>0%</span>
-                      <span>100% (Padrão)</span>
-                      <span className="text-amber-400 font-semibold">200% (Boost)</span>
-                    </div>
                   </div>
                 )}
               </div>
 
-              {/* If I am the streamer: Switch Screen source or Stop */}
               {isMeStreaming ? (
                 <>
                   {onChangeScreenSource && (
@@ -373,13 +374,11 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                       id="btn-switch-screen-source"
                       onClick={onChangeScreenSource}
                       className="px-3.5 py-2 rounded-xl bg-white/15 hover:bg-white/25 text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md border border-white/20 transition-all cursor-pointer shadow-lg"
-                      title="Escolher outra tela, janela ou guia"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
-                      <span>Trocar Janela/Tela</span>
+                      <span>Trocar Tela</span>
                     </button>
                   )}
-
                   {onToggleScreenShare && (
                     <button
                       id="btn-stop-sharing-from-stage"
@@ -387,12 +386,11 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                       className="px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold flex items-center gap-1.5 backdrop-blur-md transition-all cursor-pointer shadow-lg shadow-rose-600/30"
                     >
                       <Tv className="w-3.5 h-3.5" />
-                      <span>Parar Transmissão</span>
+                      <span>Parar</span>
                     </button>
                   )}
                 </>
               ) : (
-                /* If watching someone else: Watch live button */
                 <button
                   id="btn-watch-streamer"
                   onClick={() => {
@@ -410,7 +408,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                   }`}
                 >
                   <Eye className="w-4 h-4" />
-                  <span>{isWatchingStreamId === streamer.userId ? 'Assistindo Transmissão' : 'Assistir ao Vivo'}</span>
+                  <span>{isWatchingStreamId === streamer.userId ? 'Assistindo' : 'Assistir'}</span>
                 </button>
               )}
 
@@ -418,7 +416,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
                 <button
                   id="btn-pip-stage"
                   onClick={handlePiP}
-                  title="Picture in Picture (Mini Janela)"
+                  title="Picture in Picture"
                   className="p-2 rounded-xl bg-black/60 hover:bg-black/80 text-white border border-white/20 backdrop-blur-md transition-colors cursor-pointer"
                 >
                   <Layers className="w-4 h-4" />
@@ -426,196 +424,212 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
               )}
             </div>
           </div>
-        ) : null}
+        )}
 
-        {/* Participants Grid */}
-        <div
-          className={`grid gap-3.5 ${
-            streamer
-              ? 'flex-1 grid-cols-2 lg:grid-cols-1 overflow-y-auto max-h-[260px] lg:max-h-none custom-scrollbar'
-              : 'w-full grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 auto-rows-fr'
-          }`}
-        >
-          {participants.map((user) => {
-            const isMe = user.userId === currentUser.id;
-            const userVol = userVolumes[user.userId] ?? 100;
-            const isUserMutedLocally = userVol === 0;
-            const isVolumePopoverOpen = activeVolumePopoverUserId === user.userId;
+        {/* Square Grid of Voice Participants */}
+        <div className="flex-1 overflow-y-auto custom-scrollbar p-1 flex flex-col justify-center">
+          <div
+            id="voice-participants-square-grid"
+            className={`grid gap-3 sm:gap-4 w-full mx-auto ${
+              streamer
+                ? 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6'
+                : participants.length <= 2
+                ? 'grid-cols-1 sm:grid-cols-2 max-w-2xl'
+                : participants.length <= 4
+                ? 'grid-cols-2 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 max-w-4xl'
+                : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 max-w-5xl'
+            }`}
+          >
+            {participants.map((user) => {
+              const isMe = user.userId === currentUser.id;
+              const userVol = userVolumes[user.userId] ?? 100;
+              const isUserMutedLocally = userVol === 0;
+              const isVolumePopoverOpen = activeVolumePopoverUserId === user.userId;
 
-            return (
-              <div
-                key={user.userId}
-                className={`relative bg-[#121520] rounded-2xl flex flex-col items-center justify-between p-4 sm:p-5 border transition-all duration-300 overflow-hidden group shadow-lg min-h-[175px] ${
-                  user.isSpeaking
-                    ? 'border-emerald-400 ring-4 ring-emerald-500/30 shadow-[0_0_35px_rgba(16,185,129,0.35)] scale-[1.01]'
-                    : 'border-white/[0.08] hover:border-white/[0.16]'
-                }`}
-              >
-                {/* Background Banner Blur */}
+              return (
                 <div
-                  className="absolute inset-0 opacity-15 bg-cover bg-center filter blur-2xl scale-125 pointer-events-none"
-                  style={{ backgroundImage: `url(${user.userAvatar})` }}
-                />
-
-                {/* Top Row: Speaking Indicator Banner & Controls */}
-                <div className="w-full flex items-center justify-between z-10 gap-1.5">
-                  {/* Speaking or Open Mic Indicator */}
-                  {user.isSpeaking ? (
-                    <span className="flex items-center gap-1 text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-400/40 px-2 py-0.5 rounded-full animate-pulse shadow-sm">
-                      <Volume2 className="w-3 h-3" /> Falando
-                    </span>
-                  ) : user.isMuted ? (
-                    <span className="flex items-center gap-1 text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded-full">
-                      <MicOff className="w-3 h-3 text-rose-400" /> Mutado
-                    </span>
-                  ) : (
-                    <span className="flex items-center gap-1 text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                      <Mic className="w-3 h-3 text-emerald-400" /> Mic Aberto
-                    </span>
-                  )}
-
-                  {/* Volume Slider Toggle for this participant (if not me) */}
-                  <div className="relative">
-                    {!isMe && (
-                      <button
-                        id={`btn-user-volume-${user.userId}`}
-                        onClick={() =>
-                          setActiveVolumePopoverUserId(
-                            isVolumePopoverOpen ? null : user.userId
-                          )
-                        }
-                        title={`Ajustar volume de ${user.userName} (${userVol}%)`}
-                        className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
-                          isUserMutedLocally
-                            ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
-                            : userVol !== 100
-                            ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/40'
-                            : 'bg-black/40 hover:bg-black/70 text-slate-400 hover:text-white border-white/[0.08]'
-                        }`}
-                      >
-                        {isUserMutedLocally ? (
-                          <VolumeX className="w-3.5 h-3.5" />
-                        ) : userVol < 50 ? (
-                          <Volume1 className="w-3.5 h-3.5" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5" />
-                        )}
-                      </button>
-                    )}
-
-                    {/* Popover slider for individual user */}
-                    {isVolumePopoverOpen && (
-                      <div className="absolute top-full right-0 mt-2 p-3 bg-[#121520]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl w-48 flex flex-col gap-2 z-30">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-white truncate max-w-[100px]">{user.userName}</span>
-                          <span className="font-mono font-bold text-indigo-300">{userVol}%</span>
-                        </div>
-
-                        <div className="flex items-center gap-2">
-                          <button
-                            id={`btn-mute-user-${user.userId}`}
-                            onClick={() =>
-                              handleUpdateUserVolume(user.userId, isUserMutedLocally ? 100 : 0)
-                            }
-                            title={isUserMutedLocally ? 'Desmutar usuário' : 'Mutar usuário'}
-                            className={`p-1.5 rounded-lg border transition-colors ${
-                              isUserMutedLocally
-                                ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
-                                : 'bg-white/10 text-slate-300 hover:text-white border-white/10'
-                            }`}
-                          >
-                            {isUserMutedLocally ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                          </button>
-
-                          <input
-                            id={`slider-user-volume-${user.userId}`}
-                            type="range"
-                            min="0"
-                            max="200"
-                            step="1"
-                            value={userVol}
-                            onChange={(e) => handleUpdateUserVolume(user.userId, Number(e.target.value))}
-                            className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-white/10 rounded-lg appearance-none"
-                          />
-                        </div>
-
-                        <div className="flex justify-between text-[9px] text-slate-400">
-                          <span>0%</span>
-                          <span>100%</span>
-                          <span className="text-amber-400 font-semibold">200%</span>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Avatar with Animated Speaking Ring & Wave */}
-                <div className="relative z-10 my-2 flex flex-col items-center">
+                  key={user.userId}
+                  className={`aspect-square w-full relative bg-[#121520] rounded-2xl flex flex-col items-center justify-between p-3 sm:p-4 border transition-all duration-300 overflow-hidden group shadow-xl ${
+                    user.isSpeaking
+                      ? 'border-emerald-400 ring-4 ring-emerald-500/40 shadow-[0_0_30px_rgba(16,185,129,0.35)] scale-[1.02]'
+                      : 'border-white/[0.08] hover:border-white/[0.18]'
+                  }`}
+                >
+                  {/* Subtle Background Glow */}
                   <div
-                    className={`relative rounded-full transition-all duration-300 p-0.5 ${
-                      user.isSpeaking
-                        ? 'ring-4 ring-emerald-400 ring-offset-2 ring-offset-[#121520] shadow-[0_0_24px_rgba(52,211,153,0.7)] scale-105'
-                        : 'ring-1 ring-white/10'
-                    }`}
-                  >
-                    <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-full overflow-hidden">
-                      <img
-                        src={user.userAvatar}
-                        alt={user.userName}
-                        className="w-full h-full object-cover"
-                      />
-                    </div>
+                    className="absolute inset-0 opacity-20 bg-cover bg-center filter blur-xl scale-125 pointer-events-none"
+                    style={{ backgroundImage: `url(${user.userAvatar})` }}
+                  />
 
-                    {user.isSpeaking && (
-                      <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-slate-950 p-1.5 rounded-full shadow-md animate-bounce">
-                        <Volume2 className="w-3.5 h-3.5" />
+                  {/* Top Bar: Status Badges & Volume Button */}
+                  <div className="w-full flex items-center justify-between z-10 gap-1">
+                    {/* Speaking or Mic Status */}
+                    {user.isSpeaking ? (
+                      <span className="flex items-center gap-1 text-[10px] font-bold bg-emerald-500/25 text-emerald-300 border border-emerald-400/50 px-2 py-0.5 rounded-full animate-pulse shadow-sm">
+                        <Volume2 className="w-3 h-3" /> Falando
+                      </span>
+                    ) : user.isMuted ? (
+                      <span className="flex items-center gap-1 text-[10px] font-bold bg-rose-500/15 text-rose-300 border border-rose-500/30 px-2 py-0.5 rounded-full">
+                        <MicOff className="w-3 h-3 text-rose-400" /> Mutado
+                      </span>
+                    ) : (
+                      <span className="flex items-center gap-1 text-[10px] font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                        <Mic className="w-3 h-3 text-emerald-400" /> Aberto
+                      </span>
+                    )}
+
+                    {/* Volume Slider Popover */}
+                    {!isMe && (
+                      <div className="relative">
+                        <button
+                          id={`btn-user-volume-${user.userId}`}
+                          onClick={() =>
+                            setActiveVolumePopoverUserId(
+                              isVolumePopoverOpen ? null : user.userId
+                            )
+                          }
+                          title={`Volume de ${user.userName} (${userVol}%)`}
+                          className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
+                            isUserMutedLocally
+                              ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                              : userVol !== 100
+                              ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/40'
+                              : 'bg-black/50 hover:bg-black/80 text-slate-400 hover:text-white border-white/[0.08]'
+                          }`}
+                        >
+                          {isUserMutedLocally ? (
+                            <VolumeX className="w-3.5 h-3.5" />
+                          ) : userVol < 50 ? (
+                            <Volume1 className="w-3.5 h-3.5" />
+                          ) : (
+                            <Volume2 className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+
+                        {isVolumePopoverOpen && (
+                          <div className="absolute top-full right-0 mt-1.5 p-3 bg-[#121520]/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl w-48 flex flex-col gap-2 z-30 animate-in zoom-in-95">
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="font-bold text-white truncate max-w-[100px]">{user.userName}</span>
+                              <span className="font-mono font-bold text-indigo-300">{userVol}%</span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              <button
+                                id={`btn-mute-user-${user.userId}`}
+                                onClick={() =>
+                                  handleUpdateUserVolume(user.userId, isUserMutedLocally ? 100 : 0)
+                                }
+                                className={`p-1.5 rounded-lg border transition-colors ${
+                                  isUserMutedLocally
+                                    ? 'bg-rose-500/20 text-rose-400 border-rose-500/30'
+                                    : 'bg-white/10 text-slate-300 hover:text-white border-white/10'
+                                }`}
+                              >
+                                {isUserMutedLocally ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                              </button>
+
+                              <input
+                                id={`slider-user-volume-${user.userId}`}
+                                type="range"
+                                min="0"
+                                max="200"
+                                step="1"
+                                value={userVol}
+                                onChange={(e) => handleUpdateUserVolume(user.userId, Number(e.target.value))}
+                                className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-white/10 rounded-lg appearance-none"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  {/* Equalizer Frequency bars animation when speaking */}
-                  {user.isSpeaking && (
-                    <div className="flex items-center gap-0.5 mt-2 h-3">
-                      <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.4s_ease-in-out_infinite] h-2" />
-                      <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.6s_ease-in-out_infinite] h-3" />
-                      <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.3s_ease-in-out_infinite] h-2.5" />
-                      <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.5s_ease-in-out_infinite] h-3" />
-                      <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.4s_ease-in-out_infinite] h-1.5" />
+                  {/* Center: Square Centered Big Avatar with Speaking Ring & Soundwaves */}
+                  <div className="relative z-10 flex flex-col items-center justify-center my-auto">
+                    <div
+                      className={`relative rounded-full transition-all duration-200 p-0.5 ${
+                        user.isSpeaking
+                          ? 'ring-4 ring-emerald-400 ring-offset-2 ring-offset-[#121520] shadow-[0_0_20px_rgba(52,211,153,0.8)] scale-105'
+                          : 'ring-1 ring-white/10'
+                      }`}
+                    >
+                      <div className="w-14 h-14 sm:w-18 sm:h-18 md:w-20 md:h-20 rounded-full overflow-hidden bg-slate-900 shadow-inner">
+                        <img
+                          src={user.userAvatar}
+                          alt={user.userName}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      {user.isSpeaking && (
+                        <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-slate-950 p-1.5 rounded-full shadow-md animate-bounce">
+                          <Volume2 className="w-3 h-3" />
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* Name & Role */}
-                <div className="z-10 flex flex-col items-center text-center w-full">
-                  <span className="text-sm font-bold text-white flex items-center justify-center gap-1.5 tracking-tight w-full">
-                    <span className="truncate max-w-[140px]">{user.userName}</span>
-                    {isMe && <span className="text-[10px] text-slate-400 font-normal shrink-0">(Você)</span>}
-                  </span>
-
-                  {/* Status Badges Row */}
-                  <div className="flex items-center justify-center gap-1.5 mt-1.5 flex-wrap">
-                    {user.isScreenSharing && (
-                      <span className="flex items-center gap-1 text-[9px] font-bold bg-indigo-600 text-white px-2 py-0.5 rounded-full shadow-sm animate-pulse">
-                        <Tv className="w-2.5 h-2.5" /> Tela Compartilhada
-                      </span>
-                    )}
-
-                    {user.isCameraOn && (
-                      <span className="flex items-center gap-1 text-[9px] font-semibold bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 px-2 py-0.5 rounded-full">
-                        <Video className="w-2.5 h-2.5" /> Câmera On
-                      </span>
-                    )}
-
-                    {user.isDeafened && (
-                      <span className="flex items-center gap-1 text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-2 py-0.5 rounded-full" title="Áudio bloqueado">
-                        <VolumeX className="w-2.5 h-2.5" /> Bloqueado
-                      </span>
+                    {/* Soundwaves below avatar */}
+                    {user.isSpeaking && (
+                      <div className="flex items-center gap-0.5 mt-2 h-3">
+                        <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.4s_ease-in-out_infinite] h-2" />
+                        <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.6s_ease-in-out_infinite] h-3" />
+                        <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.3s_ease-in-out_infinite] h-2.5" />
+                        <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.5s_ease-in-out_infinite] h-3" />
+                        <span className="w-1 bg-emerald-400 rounded-full animate-[pulse_0.4s_ease-in-out_infinite] h-1.5" />
+                      </div>
                     )}
                   </div>
+
+                  {/* Bottom: Name & Feature Badges */}
+                  <div className="z-10 flex flex-col items-center text-center w-full">
+                    <span className="text-xs sm:text-sm font-bold text-white flex items-center justify-center gap-1 tracking-tight w-full">
+                      <span className="truncate max-w-[120px]">{user.userName}</span>
+                      {isMe && <span className="text-[10px] text-slate-400 font-normal shrink-0">(Você)</span>}
+                    </span>
+
+                    <div className="flex items-center justify-center gap-1 mt-1 flex-wrap">
+                      {user.isScreenSharing && (
+                        <span className="flex items-center gap-0.5 text-[8px] sm:text-[9px] font-bold bg-indigo-600 text-white px-1.5 py-0.5 rounded-full shadow-sm">
+                          <Tv className="w-2.5 h-2.5" /> Tela
+                        </span>
+                      )}
+
+                      {user.isCameraOn && (
+                        <span className="flex items-center gap-0.5 text-[8px] sm:text-[9px] font-semibold bg-cyan-600/30 text-cyan-300 border border-cyan-500/40 px-1.5 py-0.5 rounded-full">
+                          <Video className="w-2.5 h-2.5" /> Cam
+                        </span>
+                      )}
+
+                      {user.isDeafened && (
+                        <span className="flex items-center gap-0.5 text-[8px] sm:text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded-full" title="Áudio bloqueado">
+                          <VolumeX className="w-2.5 h-2.5" /> Bloqueado
+                        </span>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
+              );
+            })}
+
+            {/* Quick Invite Square Card */}
+            {onOpenInvite && (
+              <button
+                id="btn-stage-invite-tile"
+                onClick={onOpenInvite}
+                className="aspect-square w-full border-2 border-dashed border-white/10 hover:border-indigo-500/60 bg-white/[0.02] hover:bg-indigo-500/10 rounded-2xl flex flex-col items-center justify-center gap-2 text-slate-400 hover:text-indigo-300 cursor-pointer transition-all group"
+                title="Convidar amigos para esta sala"
+              >
+                <div className="p-3 rounded-full bg-white/[0.04] group-hover:bg-indigo-500/20 text-slate-300 group-hover:text-indigo-300 transition-colors">
+                  <UserPlus className="w-6 h-6" />
+                </div>
+                <div className="text-center px-2">
+                  <span className="text-xs font-bold text-slate-300 group-hover:text-white block">Convidar Amigos</span>
+                  <span className="text-[10px] text-slate-500 group-hover:text-indigo-300/80">Link rápido ou QR</span>
+                </div>
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

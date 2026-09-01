@@ -30,6 +30,7 @@ interface ChannelNavProps {
   onLeaveVoice: () => void;
   onOpenServerSettings: () => void;
   onOpenCreateChannel: (categoryId?: string) => void;
+  onOpenInvite?: (channelId?: string) => void;
   currentUser: User;
   onOpenUserSettings: () => void;
   onToggleMute: () => void;
@@ -47,6 +48,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
   onJoinVoice,
   onOpenServerSettings,
   onOpenCreateChannel,
+  onOpenInvite,
   currentUser,
   onOpenUserSettings,
   onToggleMute,
@@ -165,8 +167,11 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
             </button>
             <button
               id="btn-menu-invite-members"
-              onClick={() => setShowServerMenu(false)}
-              className="flex items-center justify-between px-2.5 py-2 rounded-lg text-indigo-400 hover:bg-indigo-600 hover:text-white transition-colors font-medium"
+              onClick={() => {
+                setShowServerMenu(false);
+                if (onOpenInvite) onOpenInvite();
+              }}
+              className="flex items-center justify-between px-2.5 py-2 rounded-lg text-indigo-400 hover:bg-indigo-600 hover:text-white transition-colors font-medium cursor-pointer"
             >
               <span>Convidar Pessoas</span>
               <UserPlus className="w-3.5 h-3.5" />
@@ -225,31 +230,49 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
 
                     return (
                       <div key={channel.id} className="flex flex-col">
-                        <button
-                          id={`btn-channel-${channel.id}`}
-                          onClick={() => {
-                            onSelectChannel(channel);
-                            if (isVoice && currentVoiceChannelId !== channel.id) {
-                              onJoinVoice(channel.id);
-                            }
-                          }}
-                          className={`w-full group flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-all text-sm font-medium ${
-                            isActive
-                              ? 'bg-indigo-600/20 text-white border border-indigo-500/30 shadow-sm font-semibold'
-                              : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            {getChannelIcon(channel.type, channel.isE2EE)}
-                            <span className="truncate">{channel.name}</span>
-                          </div>
+                        <div className="relative group/chan flex items-center">
+                          <button
+                            id={`btn-channel-${channel.id}`}
+                            onClick={() => {
+                              onSelectChannel(channel);
+                              if (isVoice && currentVoiceChannelId !== channel.id) {
+                                onJoinVoice(channel.id);
+                              }
+                            }}
+                            className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-all text-sm font-medium ${
+                              isActive
+                                ? 'bg-indigo-600/20 text-white border border-indigo-500/30 shadow-sm font-semibold'
+                                : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              {getChannelIcon(channel.type, channel.isE2EE)}
+                              <span className="truncate">{channel.name}</span>
+                            </div>
 
-                          {channel.unreadCount && channel.unreadCount > 0 ? (
-                            <span className="bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
-                              {channel.unreadCount}
-                            </span>
-                          ) : null}
-                        </button>
+                            <div className="flex items-center gap-1.5">
+                              {channel.unreadCount && channel.unreadCount > 0 ? (
+                                <span className="bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full shadow-sm">
+                                  {channel.unreadCount}
+                                </span>
+                              ) : null}
+                            </div>
+                          </button>
+
+                          {onOpenInvite && (
+                            <button
+                              id={`btn-invite-channel-${channel.id}`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onOpenInvite(channel.id);
+                              }}
+                              title={`Convidar amigos para #${channel.name}`}
+                              className="absolute right-2 opacity-0 group-hover/chan:opacity-100 hover:text-white text-slate-400 p-1 rounded hover:bg-white/10 transition-opacity cursor-pointer z-10"
+                            >
+                              <UserPlus className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
 
                         {/* Connected Voice Participants List under voice channels */}
                         {isVoice && participantsInChannel.length > 0 && (
