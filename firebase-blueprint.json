@@ -1,0 +1,73 @@
+{
+  "entities": {
+    "users": {
+      "title": "User Profile",
+      "description": "Registered user accounts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "avatar": { "type": "string" },
+        "status": { "type": "string" },
+        "customStatus": { "type": "string" },
+        "bio": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "name", "email"]
+    },
+    "servers": {
+      "title": "Server",
+      "description": "Chat and Voice Communities",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "icon": { "type": "string" },
+        "ownerId": { "type": "string" },
+        "description": { "type": "string" },
+        "memberIds": { "type": "array", "items": { "type": "string" } },
+        "members": { "type": "array" },
+        "roles": { "type": "array" },
+        "categories": { "type": "array" },
+        "channels": { "type": "array" },
+        "e2eeEnabled": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "sounds": { "type": "object" },
+        "bots": { "type": "array" },
+        "auditLogs": { "type": "array" }
+      },
+      "required": ["id", "name", "ownerId"]
+    },
+    "messages": {
+      "title": "Message",
+      "description": "Messages sent inside channels",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "serverId": { "type": "string" },
+        "channelId": { "type": "string" },
+        "authorId": { "type": "string" },
+        "userId": { "type": "string" },
+        "authorName": { "type": "string" },
+        "authorAvatar": { "type": "string" },
+        "authorRoleColor": { "type": "string" },
+        "content": { "type": "string" },
+        "encryptedContent": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "attachments": { "type": "array" },
+        "reactions": { "type": "array" },
+        "replyTo": { "type": "object" },
+        "isEncrypted": { "type": "boolean" },
+        "isPinned": { "type": "boolean" },
+        "pinned": { "type": "boolean" },
+        "isBot": { "type": "boolean" },
+        "botTag": { "type": "string" },
+        "isVoiceNote": { "type": "boolean" },
+        "voiceDuration": { "type": "number" }
+      },
+      "required": ["id", "channelId", "authorId", "content", "timestamp"]
+    }
+  }
+}

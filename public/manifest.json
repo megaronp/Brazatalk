@@ -1,0 +1,21 @@
+{
+  "name": "Braza Talk - Voz & Comunidade em Tempo Real",
+  "short_name": "Braza Talk",
+  "description": "Plataforma brasileira e global de comunicação em tempo real com voz, vídeo, compartilhamento de tela e criptografia de ponta a ponta.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1e1f22",
+  "theme_color": "#5865F2",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
