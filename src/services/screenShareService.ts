@@ -1,8 +1,7 @@
 /**
  * Screen Sharing & Media Stream Service
- * Provides robust cross-browser screen sharing support,
- * graceful HTTP/non-secure context fallback with virtual interactive canvas streams,
- * and camera stream sharing.
+ * Prioritizes native OS screen/window/tab picker (getDisplayMedia).
+ * Provides robust fallbacks only if getDisplayMedia is completely missing in the browser.
  */
 
 export interface ScreenStreamResult {
@@ -12,63 +11,94 @@ export interface ScreenStreamResult {
 }
 
 class ScreenShareService {
-  private activeVirtualCanvasCleanups: Array<() => void> = [];
+  private activeCleanups: Array<() => void> = [];
 
   /**
-   * Checks if native OS window/screen capture is supported and allowed by the browser.
-   * Browsers strictly require HTTPS (or localhost) and navigator.mediaDevices.getDisplayMedia.
+   * Checks if getDisplayMedia is available in the current browser environment.
    */
-  public isNativeScreenShareSupported(): boolean {
+  public hasGetDisplayMedia(): boolean {
     if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
-    const isSecure = window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    return isSecure && !!(navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function');
+    return !!(
+      navigator.mediaDevices &&
+      typeof navigator.mediaDevices.getDisplayMedia === 'function'
+    );
   }
 
   /**
-   * Starts a screen sharing stream.
-   * Automatically attempts native getDisplayMedia when available;
-   * seamlessly falls back to a high-performance virtual interactive canvas stream on HTTP or unsupported environments.
+   * Prompts the browser's native screen picker dialog so the user can choose
+   * which Screen, Application Window, or Browser Tab to share.
    */
-  public async startScreenShare(
-    userName: string = 'Usuário',
-    preferFallback: boolean = false
-  ): Promise<ScreenStreamResult> {
-    // If not preferring fallback and native API is present, attempt native capture
-    if (!preferFallback && this.isNativeScreenShareSupported()) {
+  public async startScreenShare(userName: string = 'Usuário'): Promise<ScreenStreamResult> {
+    // 1. If native getDisplayMedia exists, trigger the OS window/screen picker
+    if (this.hasGetDisplayMedia()) {
+      let stream: MediaStream | null = null;
+
+      // Attempt 1: Standard display capture with audio and HD video
       try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
+        stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
+            cursor: 'always',
             frameRate: { ideal: 60, max: 60 },
-            width: { ideal: 1920, max: 1920 },
-            height: { ideal: 1080, max: 1080 },
-          },
-          audio: true,
+          } as any,
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+          } as any,
         });
+      } catch (err: any) {
+        // If user actively cancelled or closed the picker, rethrow so no stream starts
+        if (
+          err.name === 'NotAllowedError' ||
+          err.name === 'AbortError' ||
+          err.name === 'SecurityError' ||
+          err.message?.toLowerCase().includes('permission denied') ||
+          err.message?.toLowerCase().includes('cancelled')
+        ) {
+          throw err;
+        }
+
+        // Attempt 2: Try video-only capture if audio constraint caused the rejection
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false,
+          });
+        } catch (err2: any) {
+          // If user cancelled, rethrow
+          if (
+            err2.name === 'NotAllowedError' ||
+            err2.name === 'AbortError' ||
+            err2.message?.toLowerCase().includes('permission denied') ||
+            err2.message?.toLowerCase().includes('cancelled')
+          ) {
+            throw err2;
+          }
+          console.warn('Native getDisplayMedia video-only attempt failed:', err2);
+        }
+      }
+
+      if (stream) {
+        const cleanup = () => {
+          stream?.getTracks().forEach((t) => t.stop());
+        };
+        this.activeCleanups.push(cleanup);
 
         return {
           stream,
           type: 'native',
-          cleanup: () => {
-            stream.getTracks().forEach((t) => t.stop());
-          },
+          cleanup,
         };
-      } catch (err: any) {
-        // If user cancelled selection explicitly, rethrow so caller knows user aborted
-        if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
-          throw err;
-        }
-        console.warn('Native getDisplayMedia failed, falling back to Virtual Screen Stream:', err);
-        // Fall through to virtual canvas stream fallback
       }
     }
 
-    // Fallback: Create high-performance virtual interactive screen stream
+    // 2. If getDisplayMedia is completely missing from this browser (e.g. iOS Safari / older mobile WebView)
+    // offer the fallback interactive canvas stream
     return this.createVirtualScreenStream(userName);
   }
 
   /**
    * Generates a 60FPS dynamic virtual interactive workspace canvas MediaStream.
-   * Works on any environment (HTTP, Mobile, WebViews, sandboxed iframes).
+   * Used only in environments where getDisplayMedia is physically unavailable.
    */
   public createVirtualScreenStream(userName: string): ScreenStreamResult {
     const canvas = document.createElement('canvas');
@@ -80,14 +110,13 @@ class ScreenShareService {
     let frame = 0;
     let isRunning = true;
 
-    // Simulated code and live metrics
     const codeSnippet = [
-      '// BRAZA TALK - REALTIME LIVE STREAM (MODO COMPATIBILIDADE)',
+      '// BRAZA TALK - REALTIME LIVE STREAM (MODO WORKSPACE)',
       'import { LiveMediaCodec, WebRTCStreamEngine } from "@brazatalk/media";',
       'const liveRoom = new WebRTCStreamEngine({ mode: "ultra-low-latency" });',
       'await liveRoom.connectChannel("braza-live-hd", { fps: 60, bitrate: 6000 });',
       'liveRoom.on("audioData", (pcm) => soundEngine.processSpatialAudio(pcm));',
-      'console.log("Transmissão HD ativa sem interrupções!");',
+      'console.log("Transmissão HD ativa!");',
     ];
 
     const render = () => {
@@ -128,7 +157,7 @@ class ScreenShareService {
       // Window Title
       ctx.fillStyle = '#f8fafc';
       ctx.font = 'bold 13px "Inter", sans-serif';
-      ctx.fillText(`Transmissão de Tela de ${userName} • 60FPS HD Live (Compatibilidade HTTP)`, 124, 56);
+      ctx.fillText(`Transmissão de Tela de ${userName} • 60FPS Live`, 124, 56);
 
       // Status Badge (Live)
       ctx.fillStyle = '#4f46e5';
@@ -165,12 +194,10 @@ class ScreenShareService {
 
     animId = requestAnimationFrame(render);
 
-    // Capture MediaStream from canvas at 60 FPS
     let stream: MediaStream;
     if (typeof (canvas as any).captureStream === 'function') {
       stream = (canvas as any).captureStream(60);
     } else {
-      // Fallback MediaStream constructor
       stream = new MediaStream();
     }
 
@@ -180,7 +207,7 @@ class ScreenShareService {
       stream.getTracks().forEach((t) => t.stop());
     };
 
-    this.activeVirtualCanvasCleanups.push(cleanup);
+    this.activeCleanups.push(cleanup);
 
     return {
       stream,
@@ -189,35 +216,13 @@ class ScreenShareService {
     };
   }
 
-  /**
-   * Starts a webcam stream formatted as a screen share stream.
-   */
-  public async startCameraScreenShare(): Promise<ScreenStreamResult> {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('Câmera indisponível no navegador');
-    }
-
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 },
-      },
-      audio: false,
-    });
-
-    return {
-      stream,
-      type: 'camera',
-      cleanup: () => {
-        stream.getTracks().forEach((t) => t.stop());
-      },
-    };
-  }
-
   public cleanupAll() {
-    this.activeVirtualCanvasCleanups.forEach((fn) => fn());
-    this.activeVirtualCanvasCleanups = [];
+    this.activeCleanups.forEach((fn) => {
+      try {
+        fn();
+      } catch {}
+    });
+    this.activeCleanups = [];
   }
 }
 

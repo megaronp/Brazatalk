@@ -975,26 +975,20 @@ export default function App() {
     }
 
     try {
-      const result = await screenShareService.startScreenShare(currentUser.name, false);
+      const result = await screenShareService.startScreenShare(currentUser.name);
       const stream = result.stream;
 
       setScreenMediaStream(stream);
       setIsScreenSharing(true);
       soundEngine.playScreenShareStart();
 
-      if (result.type === 'native') {
-        pushNotificationToast(
-          'Transmissão Nativa Iniciada',
-          'Sua janela/tela está sendo compartilhada em 60FPS HD.',
-          'stream_start'
-        );
-      } else {
-        pushNotificationToast(
-          'Transmissão Iniciada (Modo Compatibilidade)',
-          'Transmitindo workspace 60FPS otimizado para navegadores HTTP.',
-          'stream_start'
-        );
-      }
+      pushNotificationToast(
+        'Transmissão ao Vivo Iniciada',
+        result.type === 'native'
+          ? 'Você selecionou uma tela/janela para transmitir em 60FPS.'
+          : 'Workspace interativo 60FPS iniciado.',
+        'stream_start'
+      );
 
       // Listen for when the user clicks the browser's native floating "Stop sharing" bar
       const videoTrack = stream.getVideoTracks()[0];
@@ -1020,31 +1014,28 @@ export default function App() {
       }
     } catch (err: any) {
       // User cancelled picker dialog or denied permission
-      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
-        console.warn('Screen share start info:', err);
-        // Seamless fallback to virtual screen
-        try {
-          const fallbackResult = screenShareService.createVirtualScreenStream(currentUser.name);
-          setScreenMediaStream(fallbackResult.stream);
-          setIsScreenSharing(true);
-          soundEngine.playScreenShareStart();
-          pushNotificationToast(
-            'Transmissão ao Vivo Ativa',
-            'Modo de compatibilidade ativado com sucesso!',
-            'stream_start'
-          );
-          setVoiceParticipants((prev) =>
-            prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: true } : p))
-          );
-        } catch {}
+      if (
+        err.name === 'NotAllowedError' ||
+        err.name === 'AbortError' ||
+        err.message?.toLowerCase().includes('permission denied') ||
+        err.message?.toLowerCase().includes('cancelled')
+      ) {
+        // User closed or cancelled the picker dialog - simply return quietly
+        return;
       }
+
+      console.warn('Screen share error:', err);
+      pushNotificationToast(
+        'Captura de Tela',
+        `Não foi possível iniciar a captura: ${err.message || 'Verifique as permissões de tela do navegador.'}`,
+        'message'
+      );
     }
   };
 
   const handleChangeScreenSource = async () => {
     try {
-      const isNative = screenShareService.isNativeScreenShareSupported();
-      const result = await screenShareService.startScreenShare(currentUser.name, !isNative);
+      const result = await screenShareService.startScreenShare(currentUser.name);
 
       if (screenMediaStream) {
         screenMediaStream.getTracks().forEach((track) => track.stop());
@@ -1059,7 +1050,11 @@ export default function App() {
         };
       }
     } catch (err: any) {
-      if (err.name !== 'NotAllowedError' && err.name !== 'AbortError') {
+      if (
+        err.name !== 'NotAllowedError' &&
+        err.name !== 'AbortError' &&
+        !err.message?.toLowerCase().includes('cancelled')
+      ) {
         console.warn('Change screen error:', err);
       }
     }
