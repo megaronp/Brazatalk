@@ -10,9 +10,11 @@ import {
   query, 
   where, 
   orderBy, 
+  limit,
   onSnapshot 
 } from './firebase';
 import { Server, Message, User, Permission, ChannelType } from '../types';
+import { offlineStorage } from './offlineStorage';
 
 /**
  * Recursively strips undefined fields from an object/array so Firestore setDoc/updateDoc never rejects it.
@@ -41,6 +43,13 @@ function sanitizeFirestoreData<T>(obj: T): T {
 export const firebaseDb = {
   // Listen to all servers the user is a member of or owns, or public servers
   subscribeToServers(userId: string, callback: (servers: Server[]) => void) {
+    // Deliver offline cached servers immediately for zero-latency startup
+    offlineStorage.getCachedServers().then((cached) => {
+      if (cached && cached.length > 0) {
+        callback(cached);
+      }
+    }).catch(() => {});
+
     const serversRef = collection(db, 'servers');
     return onSnapshot(serversRef, (snapshot) => {
       const serverList: Server[] = [];
@@ -48,6 +57,7 @@ export const firebaseDb = {
         serverList.push({ id: docSnap.id, ...docSnap.data() } as Server);
       });
       callback(serverList);
+      offlineStorage.cacheServers(serverList).catch(() => {});
     }, (err) => {
       console.error('Firestore subscribeToServers error:', err);
     });
@@ -58,6 +68,7 @@ export const firebaseDb = {
     const serverRef = doc(db, 'servers', server.id);
     const cleaned = sanitizeFirestoreData(server);
     await setDoc(serverRef, cleaned, { merge: true });
+    offlineStorage.cacheServers([server]).catch(() => {});
   },
 
   // Delete server
@@ -65,10 +76,21 @@ export const firebaseDb = {
     await deleteDoc(doc(db, 'servers', serverId));
   },
 
-  // Listen to messages for a specific channel
-  subscribeToChannelMessages(channelId: string, callback: (messages: Message[]) => void) {
+  // Listen to messages for a specific channel with pagination/limit and offline cache
+  subscribeToChannelMessages(channelId: string, callback: (messages: Message[]) => void, maxCount: number = 60) {
+    // Deliver offline cached messages immediately
+    offlineStorage.getCachedMessages(channelId).then((cached) => {
+      if (cached && cached.length > 0) {
+        callback(cached);
+      }
+    }).catch(() => {});
+
     const messagesRef = collection(db, 'messages');
-    const q = query(messagesRef, where('channelId', '==', channelId));
+    const q = query(
+      messagesRef, 
+      where('channelId', '==', channelId),
+      limit(maxCount)
+    );
     
     return onSnapshot(q, (snapshot) => {
       const msgs: Message[] = [];
@@ -78,16 +100,46 @@ export const firebaseDb = {
       // Sort chronologically by timestamp
       msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
       callback(msgs);
+      offlineStorage.cacheMessages(msgs).catch(() => {});
     }, (err) => {
       console.error('Firestore subscribeToChannelMessages error:', err);
     });
   },
 
-  // Send a message
+  // Send a message with offline fallback queue
   async sendMessage(message: Message) {
     const msgRef = doc(db, 'messages', message.id);
     const cleaned = sanitizeFirestoreData(message);
-    await setDoc(msgRef, cleaned);
+    try {
+      await setDoc(msgRef, cleaned);
+      await offlineStorage.cacheMessages([message]);
+    } catch (err) {
+      console.warn('Firestore sendMessage failed or offline, queuing to outbox:', err);
+      await offlineStorage.queueOutboxMessage(message);
+      await offlineStorage.cacheMessages([message]);
+      throw err;
+    }
+  },
+
+  // Sync outbox messages to Firestore
+  async syncOutbox(): Promise<number> {
+    const pending = await offlineStorage.getOutboxMessages();
+    if (pending.length === 0) return 0;
+    let synced = 0;
+    for (const msg of pending) {
+      try {
+        const msgRef = doc(db, 'messages', msg.id);
+        const cleaned = sanitizeFirestoreData(msg);
+        await setDoc(msgRef, cleaned);
+        synced++;
+      } catch (err) {
+        console.warn('Failed to sync outbox item:', msg.id, err);
+      }
+    }
+    if (synced === pending.length) {
+      await offlineStorage.clearOutbox();
+    }
+    return synced;
   },
 
   // Update a message (e.g. edit, reactions, pin)
@@ -98,7 +150,14 @@ export const firebaseDb = {
   },
 
   // Delete a message
-  async deleteMessage(messageId: string) {
+  async deleteMessage(messageId: string, serverId?: string, channelId?: string) {
+    if (serverId && channelId) {
+      try {
+        await deleteDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId));
+      } catch (e) {
+        console.warn('Subcollection delete failed, attempting root delete:', e);
+      }
+    }
     await deleteDoc(doc(db, 'messages', messageId));
   },
 
@@ -175,7 +234,7 @@ export const firebaseDb = {
           name: 'geral',
           type: 'text' as ChannelType,
           topic: 'Bate-papo principal da comunidade Braza Talk',
-          isE2EE: true,
+          isE2EE: false,
           isPrivate: false,
         },
         {

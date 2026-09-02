@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Channel, Message, User } from '../../types';
+import { Channel, Message, MessageAttachment, User } from '../../types';
 import {
   Hash,
   Volume2,
@@ -13,6 +13,8 @@ import {
   X,
   Menu,
   UserPlus,
+  UserCheck,
+  Download,
 } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
@@ -21,7 +23,12 @@ interface ChatAreaProps {
   channel: Channel;
   messages: Message[];
   currentUser: User;
-  onSendMessage: (content: string, isVoiceNote?: boolean, voiceDuration?: number) => void;
+  onSendMessage: (
+    content: string,
+    isVoiceNote?: boolean,
+    voiceDuration?: number,
+    attachments?: MessageAttachment[]
+  ) => void;
   onReact: (messageId: string, emoji: string) => void;
   onPinMessage: (messageId: string) => void;
   onDeleteMessage: (messageId: string) => void;
@@ -49,7 +56,10 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [showPinnedOnly, setShowPinnedOnly] = useState(false);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const isDirectMessage = channel.id.startsWith('dm-');
 
   // Auto-scroll to bottom on messages change
   useEffect(() => {
@@ -67,6 +77,9 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   });
 
   const getChannelIcon = () => {
+    if (isDirectMessage) {
+      return <UserCheck className="w-5 h-5 text-indigo-400" />;
+    }
     switch (channel.type) {
       case 'voice':
         return <Volume2 className="w-5 h-5 text-slate-400" />;
@@ -81,6 +94,45 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 
   return (
     <div id="chat-main-area" className="flex-1 bg-[#0e1017] flex flex-col min-w-0 overflow-hidden relative">
+      {/* Lightbox / Image Zoom Modal */}
+      {previewImage && (
+        <div
+          id="modal-image-lightbox"
+          onClick={() => setPreviewImage(null)}
+          className="fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-150"
+        >
+          <div className="relative max-w-5xl max-h-[90vh] flex flex-col items-center" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={previewImage}
+              alt="Ampliação"
+              className="max-h-[82vh] max-w-full object-contain rounded-2xl shadow-2xl border border-white/10"
+            />
+            <div className="flex items-center gap-3 mt-3">
+              <a
+                href={previewImage}
+                download="brazatalk_media.jpg"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md cursor-pointer transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                <span>Salvar Imagem</span>
+              </a>
+              <button
+                onClick={() => setPreviewImage(null)}
+                className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+            <button
+              onClick={() => setPreviewImage(null)}
+              className="absolute -top-3 -right-3 w-8 h-8 rounded-full bg-slate-800 text-white border border-white/20 flex items-center justify-center shadow-lg hover:bg-slate-700 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Channel Header */}
       <div
         id="channel-header-bar"
@@ -103,16 +155,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {getChannelIcon()}
           <span className="font-bold text-white text-sm truncate tracking-tight">{channel.name}</span>
 
-          {channel.isE2EE && (
+          {/* E2EE badge ONLY for 1-on-1 private Direct Messages */}
+          {isDirectMessage && (
             <button
               id="btn-channel-e2ee-badge"
               onClick={onOpenE2EESecurityModal}
-              title="Criptografia de Ponta a Ponta Ativa. Clique para verificar chaves."
-              className="hidden xs:flex items-center gap-1 text-[11px] bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold transition-colors cursor-pointer shrink-0"
+              title="Criptografia de Ponta a Ponta Ativa nesta conversa privada. Clique para verificar chaves."
+              className="flex items-center gap-1.5 text-[11px] bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 px-2.5 py-0.5 rounded-full font-semibold transition-colors cursor-pointer shrink-0 shadow-sm"
             >
               <Lock className="w-3 h-3" />
-              <span className="hidden sm:inline">E2EE Ativo</span>
-              <span className="sm:hidden">E2EE</span>
+              <span>E2EE Ponta a Ponta</span>
             </button>
           )}
 
@@ -248,8 +300,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
         channel={channel}
         replyingTo={replyingTo}
         onCancelReply={() => setReplyingTo(null)}
-        onSendMessage={(content, isVoice, duration) => {
-          onSendMessage(content, isVoice, duration);
+        onSendMessage={(content, isVoice, duration, attachments) => {
+          onSendMessage(content, isVoice, duration, attachments);
           setReplyingTo(null);
         }}
         isEncrypted={channel.isE2EE}

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import Markdown from 'react-markdown';
 import { Message, User } from '../../types';
 import {
   Smile,
@@ -42,39 +43,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   // Format timestamp
   const date = new Date(message.timestamp);
   const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-
-  // Format Markdown-like content safely
-  const renderContent = (content: string) => {
-    const lines = content.split('\n');
-    return lines.map((line, idx) => {
-      // Bold **text**
-      const formatted = line.replace(/\*\*(.*?)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
-      // Inline code `code`
-      const formattedCode = formatted.replace(
-        /`(.*?)`/g,
-        '<code class="bg-[#181b28] text-amber-300 px-1.5 py-0.5 rounded font-mono text-xs border border-white/[0.06]">$1</code>'
-      );
-
-      // Check header ### or ##
-      if (line.startsWith('### ')) {
-        return (
-          <h4
-            key={idx}
-            className="text-sm font-bold text-white mt-1 mb-0.5 tracking-tight"
-            dangerouslySetInnerHTML={{ __html: line.substring(4) }}
-          />
-        );
-      }
-
-      return (
-        <span
-          key={idx}
-          className="block leading-relaxed"
-          dangerouslySetInnerHTML={{ __html: formattedCode || '&nbsp;' }}
-        />
-      );
-    });
-  };
 
   return (
     <div
@@ -143,8 +111,36 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         </div>
 
         {/* Message Content */}
-        <div className="text-sm text-slate-300 mt-0.5 whitespace-pre-wrap select-text font-normal">
-          {renderContent(message.content)}
+        <div className="markdown-body text-sm text-slate-300 mt-0.5 select-text font-normal">
+          <Markdown
+            components={{
+              p: ({ children }) => <p className="leading-relaxed mb-1 last:mb-0 break-words">{children}</p>,
+              strong: ({ children }) => <strong className="text-white font-bold">{children}</strong>,
+              em: ({ children }) => <em className="text-slate-200 italic">{children}</em>,
+              code: ({ children }) => (
+                <code className="bg-[#181b28] text-amber-300 px-1.5 py-0.5 rounded font-mono text-xs border border-white/[0.06]">
+                  {children}
+                </code>
+              ),
+              h1: ({ children }) => <h1 className="text-base font-bold text-white mt-1.5 mb-1">{children}</h1>,
+              h2: ({ children }) => <h2 className="text-sm font-bold text-white mt-1.5 mb-0.5">{children}</h2>,
+              h3: ({ children }) => <h3 className="text-sm font-semibold text-white mt-1 mb-0.5">{children}</h3>,
+              a: ({ href, children }) => (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-indigo-400 hover:underline inline-flex items-center gap-0.5"
+                >
+                  {children}
+                </a>
+              ),
+              ul: ({ children }) => <ul className="list-disc list-inside space-y-0.5 my-1 text-slate-300">{children}</ul>,
+              ol: ({ children }) => <ol className="list-decimal list-inside space-y-0.5 my-1 text-slate-300">{children}</ol>,
+            }}
+          >
+            {message.content}
+          </Markdown>
         </div>
 
         {/* Voice Note Player if voice note */}

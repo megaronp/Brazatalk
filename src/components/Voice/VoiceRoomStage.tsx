@@ -24,6 +24,7 @@ import {
   Users,
 } from 'lucide-react';
 import { soundEngine } from '../../services/soundEngine';
+import { webrtcService } from '../../services/webrtcService';
 
 interface VoiceRoomStageProps {
   channel: Channel;
@@ -92,6 +93,14 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
   const streamer = participants.find((p) => p.isScreenSharing);
   const isMeStreaming = streamer?.userId === currentUser.id;
 
+  // Real-time listener for WebRTC remote media streams
+  const [, setRemoteStreamRevision] = useState(0);
+  useEffect(() => {
+    return webrtcService.onRemoteStream(() => {
+      setRemoteStreamRevision((rev) => rev + 1);
+    });
+  }, []);
+
   // Update real video element volume
   useEffect(() => {
     if (videoRef.current) {
@@ -101,17 +110,24 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
     }
   }, [streamVolume, isStreamMuted, isMeStreaming]);
 
-  // Attach real MediaStream to video element
+  // Attach real MediaStream to video element (local streamer or remote WebRTC peer)
   useEffect(() => {
     if (videoRef.current) {
-      if (screenMediaStream) {
-        videoRef.current.srcObject = screenMediaStream;
+      let activeStream: MediaStream | null = null;
+      if (isMeStreaming) {
+        activeStream = screenMediaStream || null;
+      } else if (streamer) {
+        activeStream = webrtcService.getRemoteStream(streamer.userId) || null;
+      }
+
+      if (activeStream) {
+        videoRef.current.srcObject = activeStream;
         videoRef.current.play().catch((err) => console.warn('Video play prevented:', err));
       } else {
         videoRef.current.srcObject = null;
       }
     }
-  }, [screenMediaStream, streamer]);
+  }, [screenMediaStream, streamer, isMeStreaming]);
 
   // Fallback Animated Screen Visualizer
   useEffect(() => {

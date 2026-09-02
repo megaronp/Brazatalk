@@ -49,27 +49,21 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
     };
   }, []);
 
-  const handleDownload = (platform: string, filename: string) => {
+  const handleDownload = (platform: string, downloadPath: string, filename: string) => {
     setDownloadingPlatform(platform);
-    setTimeout(() => {
-      const blob = new Blob(
-        [
-          `Braza Talk Native Installer for ${platform}\n` +
-          `Version: ${updateState.currentVersion}\n` +
-          `Security: E2EE Encrypted Channels Enabled\n` +
-          `Package: ${filename}\n` +
-          `Build Date: ${new Date().toISOString()}\n`
-        ],
-        { type: 'text/plain' }
-      );
-      const url = URL.createObjectURL(blob);
+    try {
       const a = document.createElement('a');
-      a.href = url;
+      a.href = downloadPath;
       a.download = filename;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error('Download error:', err);
+    }
+    setTimeout(() => {
       setDownloadingPlatform(null);
-    }, 700);
+    }, 800);
   };
 
   const handleInstallPWA = async () => {
@@ -284,50 +278,101 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
 
               {/* Desktop Platforms Grid */}
               <div>
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-2.5">
-                  Pacotes para Desktop (Atalhos & Standalone)
-                </h3>
+                <div className="flex items-center justify-between mb-2.5">
+                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                    Pacotes Desktop Nativos (Sem Mockup)
+                  </h3>
+                  <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
+                    Arquivos Reais
+                  </span>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 sm:gap-3">
+                  {/* Linux - Primary .deb */}
+                  <div className="bg-[#141722] border border-white/[0.08] hover:border-amber-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md">
+                    <Monitor className="w-7 h-7 sm:w-8 sm:h-8 text-amber-400 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
+                    <span className="text-sm font-bold text-white tracking-tight">Linux (Debian / Ubuntu)</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">Ubuntu, Debian, Mint, Pop!_OS (.deb)</span>
+                    <div className="w-full space-y-1.5 mt-2.5 sm:mt-3">
+                      <button
+                        id="btn-download-linux-deb"
+                        onClick={() => handleDownload('Linux (.deb)', '/downloads/brazatalk_2.6.0_all.deb', 'brazatalk_2.6.0_all.deb')}
+                        className="text-xs bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold px-3 py-1.5 rounded-xl w-full shadow-md shadow-amber-500/20 cursor-pointer transition-colors"
+                      >
+                        {downloadingPlatform === 'Linux (.deb)' ? 'Baixando...' : 'Baixar Pacote .deb'}
+                      </button>
+                      <button
+                        id="btn-download-linux-sh"
+                        onClick={() => handleDownload('Linux (.sh)', '/downloads/install-linux.sh', 'install-linux.sh')}
+                        className="text-[10px] bg-white/5 hover:bg-white/10 text-slate-300 font-medium px-2 py-1 rounded-lg w-full transition-colors cursor-pointer border border-white/5"
+                      >
+                        Script Universal (.sh)
+                      </button>
+                    </div>
+                  </div>
+
                   {/* Windows */}
-                  <button
-                    id="btn-download-windows"
-                    onClick={() => handleDownload('Windows', 'BrazaTalk-Setup-x64.exe')}
-                    className="bg-[#141722] hover:bg-[#181c2b] border border-white/[0.06] hover:border-indigo-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md cursor-pointer"
-                  >
+                  <div className="bg-[#141722] border border-white/[0.08] hover:border-indigo-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md">
                     <Monitor className="w-7 h-7 sm:w-8 sm:h-8 text-indigo-400 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
                     <span className="text-sm font-bold text-white tracking-tight">Windows</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">Windows 10 / 11 (64-bit)</span>
-                    <span className="mt-2.5 sm:mt-3 text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl font-semibold w-full shadow-md shadow-indigo-600/30">
-                      {downloadingPlatform === 'Windows' ? 'Baixando...' : 'Baixar .exe'}
-                    </span>
-                  </button>
+                    <span className="text-[10px] text-slate-400 mt-0.5">Windows 10 / 11 (Desktop Setup)</span>
+                    <div className="w-full space-y-1.5 mt-2.5 sm:mt-3">
+                      <button
+                        id="btn-download-windows"
+                        onClick={() => handleDownload('Windows', '/downloads/BrazaTalk-Setup.cmd', 'BrazaTalk-Setup.cmd')}
+                        className="text-xs bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-xl font-bold w-full shadow-md shadow-indigo-600/30 cursor-pointer transition-colors"
+                      >
+                        {downloadingPlatform === 'Windows' ? 'Baixando...' : 'Baixar Atalho .cmd'}
+                      </button>
+                      <button
+                        onClick={handleInstallPWA}
+                        className="text-[10px] bg-white/5 hover:bg-white/10 text-indigo-300 font-medium px-2 py-1 rounded-lg w-full transition-colors cursor-pointer border border-white/5"
+                      >
+                        Ou Instalar como PWA
+                      </button>
+                    </div>
+                  </div>
 
                   {/* macOS */}
-                  <button
-                    id="btn-download-macos"
-                    onClick={() => handleDownload('macOS', 'BrazaTalk-Universal.dmg')}
-                    className="bg-[#141722] hover:bg-[#181c2b] border border-white/[0.06] hover:border-emerald-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md cursor-pointer"
-                  >
+                  <div className="bg-[#141722] border border-white/[0.08] hover:border-emerald-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md">
                     <Apple className="w-7 h-7 sm:w-8 sm:h-8 text-slate-200 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
                     <span className="text-sm font-bold text-white tracking-tight">macOS</span>
                     <span className="text-[10px] text-slate-400 mt-0.5">Apple Silicon & Intel</span>
-                    <span className="mt-2.5 sm:mt-3 text-xs bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3 py-1.5 rounded-xl font-bold w-full shadow-md shadow-emerald-500/30">
-                      {downloadingPlatform === 'macOS' ? 'Baixando...' : 'Baixar .dmg'}
-                    </span>
-                  </button>
+                    <div className="w-full space-y-1.5 mt-2.5 sm:mt-3">
+                      <button
+                        id="btn-download-macos"
+                        onClick={() => handleDownload('macOS', '/downloads/BrazaTalk-macOS.command', 'BrazaTalk-macOS.command')}
+                        className="text-xs bg-emerald-500 hover:bg-emerald-400 text-slate-950 px-3 py-1.5 rounded-xl font-bold w-full shadow-md shadow-emerald-500/30 cursor-pointer transition-colors"
+                      >
+                        {downloadingPlatform === 'macOS' ? 'Baixando...' : 'Baixar .command'}
+                      </button>
+                      <button
+                        onClick={handleInstallPWA}
+                        className="text-[10px] bg-white/5 hover:bg-white/10 text-emerald-300 font-medium px-2 py-1 rounded-lg w-full transition-colors cursor-pointer border border-white/5"
+                      >
+                        Ou Adicionar ao Dock (PWA)
+                      </button>
+                    </div>
+                  </div>
+                </div>
 
-                  {/* Linux */}
+                {/* Quick Linux Terminal Installation Command */}
+                <div className="mt-3 p-3 rounded-xl bg-black/40 border border-white/[0.06] text-xs flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-[10px] text-slate-400 block font-semibold">Comando rápido no terminal Linux (.deb):</span>
+                    <code className="text-[11px] text-amber-300 font-mono select-all truncate block">
+                      sudo dpkg -i brazatalk_2.6.0_all.deb
+                    </code>
+                  </div>
                   <button
-                    id="btn-download-linux"
-                    onClick={() => handleDownload('Linux', 'BrazaTalk-Linux.AppImage')}
-                    className="bg-[#141722] hover:bg-[#181c2b] border border-white/[0.06] hover:border-amber-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md cursor-pointer"
+                    onClick={() => {
+                      navigator.clipboard.writeText('sudo dpkg -i brazatalk_2.6.0_all.deb');
+                      setCopiedUrl(true);
+                      setTimeout(() => setCopiedUrl(false), 2000);
+                    }}
+                    className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-slate-300 text-[10px] font-medium shrink-0 cursor-pointer"
                   >
-                    <Monitor className="w-7 h-7 sm:w-8 sm:h-8 text-amber-400 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
-                    <span className="text-sm font-bold text-white tracking-tight">Linux</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">AppImage / Deb</span>
-                    <span className="mt-2.5 sm:mt-3 text-xs bg-[#1c202e] text-white px-3 py-1.5 rounded-xl font-semibold w-full hover:bg-indigo-600 border border-white/[0.06]">
-                      {downloadingPlatform === 'Linux' ? 'Baixando...' : 'Baixar .AppImage'}
-                    </span>
+                    Copiar
                   </button>
                 </div>
               </div>

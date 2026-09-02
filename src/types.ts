@@ -102,6 +102,7 @@ export interface Message {
   botTag?: string;
   content: string;
   encryptedContent?: string;
+  encryptionIv?: string;
   isEncrypted?: boolean;
   attachments?: MessageAttachment[];
   reactions: MessageReaction[];

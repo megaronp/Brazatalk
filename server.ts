@@ -3,12 +3,35 @@ import http from 'http';
 import path from 'path';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
+import { GoogleGenAI } from '@google/genai';
 
 const app = express();
 const server = http.createServer(app);
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
+
+// Lazy-loaded Gemini AI client
+let aiClient: GoogleGenAI | null = null;
+function getAiClient(): GoogleGenAI | null {
+  if (!aiClient && process.env.GEMINI_API_KEY) {
+    aiClient = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  }
+  return aiClient;
+}
+
+async function generateWithFallback(ai: GoogleGenAI, params: any) {
+  try {
+    return await ai.models.generateContent(params);
+  } catch (err: any) {
+    // If 503 high demand, retry once after a short wait
+    if (err?.message?.includes('503') || err?.status === 'UNAVAILABLE') {
+      await new Promise((r) => setTimeout(r, 1200));
+      return await ai.models.generateContent(params);
+    }
+    throw err;
+  }
+}
 
 // In-memory real-time state for connected clients & voice rooms
 interface ConnectedClient {
@@ -48,7 +71,7 @@ function broadcastToChannel(channelId: string, data: object, excludeWs?: WebSock
 }
 
 wss.on('connection', (ws) => {
-  let clientId = `client-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+  let clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
   ws.on('message', (raw) => {
     try {
@@ -247,12 +270,36 @@ wss.on('connection', (ws) => {
 
         case 'webrtc-signal': {
           // Relay WebRTC signaling (offer / answer / ice-candidate)
-          broadcastToChannel(msg.channelId, {
-            type: 'webrtc-signal',
-            fromUserId: msg.fromUserId,
-            toUserId: msg.toUserId,
-            signal: msg.signal,
-          }, ws);
+          if (msg.toUserId) {
+            let delivered = false;
+            clients.forEach((client) => {
+              if (client.userId === msg.toUserId && client.ws.readyState === WebSocket.OPEN) {
+                client.ws.send(JSON.stringify({
+                  type: 'webrtc-signal',
+                  channelId: msg.channelId,
+                  fromUserId: msg.fromUserId,
+                  toUserId: msg.toUserId,
+                  signal: msg.signal,
+                }));
+                delivered = true;
+              }
+            });
+            if (!delivered) {
+              broadcastToChannel(msg.channelId, {
+                type: 'webrtc-signal',
+                fromUserId: msg.fromUserId,
+                toUserId: msg.toUserId,
+                signal: msg.signal,
+              }, ws);
+            }
+          } else {
+            broadcastToChannel(msg.channelId, {
+              type: 'webrtc-signal',
+              fromUserId: msg.fromUserId,
+              toUserId: msg.toUserId,
+              signal: msg.signal,
+            }, ws);
+          }
           break;
         }
 
@@ -290,6 +337,89 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', serverTime: Date.now(), connectedClients: clients.size });
 });
 
+// Real AI Command Handler (Gemini 2.5 Flash)
+app.post('/api/ai/command', async (req, res) => {
+  const { command, prompt, channelMessages, channelName } = req.body;
+
+  const ai = getAiClient();
+  if (!ai) {
+    return res.json({
+      success: false,
+      reply: '⚠️ **Gemini AI não configurado no servidor.**\n\nPara obter respostas inteligentes em tempo real e resumos automáticos via `/ai` e `/summarize`, configure a variável `GEMINI_API_KEY` nos segredos do projeto.',
+    });
+  }
+
+  try {
+    if (command === '/summarize') {
+      const recentContext = Array.isArray(channelMessages) && channelMessages.length > 0
+        ? channelMessages.slice(-25).join('\n')
+        : 'Nenhuma mensagem recente encontrada no canal.';
+
+      const promptText = `Você é o Braza Bot, assistente inteligente do aplicativo Braza Talk.
+Resuma as mensagens recentes trocadas no canal "${channelName || 'geral'}":
+
+${recentContext}
+
+Gere um resumo em português com:
+- Tópicos principais discutidos
+- Decisões ou conclusões tomadas
+- Tom de conversa objetivo e bem formatado em Markdown.`;
+
+      const response = await generateWithFallback(ai, {
+        model: 'gemini-3.6-flash',
+        contents: promptText,
+      });
+
+      return res.json({
+        success: true,
+        reply: response.text || 'Nenhum resumo pôde ser gerado para o conteúdo atual.',
+      });
+    }
+
+    // Default /ai <pergunta>
+    const userQuery = prompt || 'Como usar o Braza Talk?';
+    const response = await generateWithFallback(ai, {
+      model: 'gemini-3.6-flash',
+      contents: userQuery,
+      config: {
+        systemInstruction: 'Você é o Braza Bot, assistente oficial do Braza Talk (aplicativo de comunicação em tempo real com voz, vídeo, chat e canais). Responda com simpatia, precisão, concisão e formatação amigável em Markdown em português.',
+      },
+    });
+
+    return res.json({
+      success: true,
+      reply: response.text || 'Sem resposta no momento.',
+    });
+  } catch (error: any) {
+    console.error('Gemini AI error:', error);
+    const is503 = error?.message?.includes('503') || error?.status === 'UNAVAILABLE';
+    const cleanMsg = is503
+      ? '⚠️ **IA com alta demanda no momento:** Os servidores do Gemini estão processando muitas requisições temporariamente. Por favor, aguarde alguns segundos e envie sua pergunta novamente.'
+      : `⚠️ Falha ao processar solicitação com Gemini: ${error?.message || 'Erro desconhecido'}`;
+
+    return res.json({
+      success: false,
+      reply: cleanMsg,
+    });
+  }
+});
+
+// Serve direct download packages for Desktop
+app.use('/downloads', express.static(path.join(process.cwd(), 'public', 'downloads'), {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.deb')) {
+      res.setHeader('Content-Type', 'application/vnd.debian.binary-package');
+      res.setHeader('Content-Disposition', 'attachment; filename="brazatalk_2.6.0_all.deb"');
+    } else if (filePath.endsWith('.sh')) {
+      res.setHeader('Content-Type', 'application/x-sh');
+      res.setHeader('Content-Disposition', 'attachment; filename="install-linux.sh"');
+    } else if (filePath.endsWith('.cmd')) {
+      res.setHeader('Content-Type', 'application/x-msdos-program');
+      res.setHeader('Content-Disposition', 'attachment; filename="BrazaTalk-Setup.cmd"');
+    }
+  },
+}));
+
 app.post('/api/push-notification', (req, res) => {
   const { title, body, userId } = req.body;
   // Push notification simulator/dispatch
@@ -313,7 +443,7 @@ async function start() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`DisSphere Real-time Server listening on http://0.0.0.0:${PORT}`);
+    console.log(`Braza Talk Real-time Server listening on http://0.0.0.0:${PORT}`);
   });
 }
 

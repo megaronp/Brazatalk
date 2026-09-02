@@ -10,6 +10,7 @@ import {
   Plus,
   Settings,
   ShieldCheck,
+  Lock,
   Tv,
   Mic,
   MicOff,
@@ -37,6 +38,7 @@ interface ChannelNavProps {
   onToggleDeafen: () => void;
   isMuted: boolean;
   isDeafened: boolean;
+  directMessageUsers?: User[];
 }
 
 export const ChannelNav: React.FC<ChannelNavProps> = ({
@@ -55,6 +57,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
   onToggleDeafen,
   isMuted,
   isDeafened,
+  directMessageUsers,
 }) => {
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [showServerMenu, setShowServerMenu] = useState(false);
@@ -63,9 +66,9 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
     setCollapsedCategories((prev) => ({ ...prev, [catId]: !prev[catId] }));
   };
 
-  const getChannelIcon = (type: Channel['type'], isE2EE: boolean) => {
-    if (isE2EE) {
-      return <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />;
+  const getChannelIcon = (type: Channel['type'], isPrivate?: boolean) => {
+    if (isPrivate) {
+      return <Lock className="w-4 h-4 text-slate-400 group-hover:text-slate-200 shrink-0" />;
     }
     switch (type) {
       case 'voice':
@@ -80,35 +83,104 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
   };
 
   if (!server) {
-    // Direct Messages / Friends View Sidebar
+    const dmList = directMessageUsers && directMessageUsers.length > 0 ? directMessageUsers : [
+      {
+        id: 'user-elena',
+        name: 'Elena Rostova',
+        avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
+        status: 'online' as const,
+        customStatus: 'Desenvolvendo Braza Talk WebRTC',
+      },
+      {
+        id: 'user-lucas',
+        name: 'Lucas Silva',
+        avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
+        status: 'online' as const,
+        customStatus: 'Testando áudio HD SFU',
+      },
+      {
+        id: 'user-sofia',
+        name: 'Sofia Chen',
+        avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150',
+        status: 'idle' as const,
+        customStatus: 'Em reunião no canal de voz',
+      },
+    ];
+
     return (
       <div id="sidebar-dms" className="w-60 bg-[#0c0e15] border-r border-white/[0.06] flex flex-col justify-between shrink-0 select-none">
         <div className="p-3 border-b border-white/[0.06]">
+          <div className="flex items-center justify-between px-1 mb-2">
+            <span className="text-xs font-black uppercase tracking-wider text-slate-300">Mensagens Diretas</span>
+            <span className="flex items-center gap-1 text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono font-bold">
+              <ShieldCheck className="w-3 h-3" /> E2EE
+            </span>
+          </div>
           <div className="bg-[#141722] text-slate-400 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between border border-white/[0.04]">
-            <span>Encontrar conversa</span>
-            <kbd className="bg-[#1c202e] text-[10px] px-1.5 py-0.5 rounded border border-white/[0.08] text-slate-300 font-mono">Ctrl+K</kbd>
+            <span>Amigos Privados</span>
+            <kbd className="bg-[#1c202e] text-[10px] px-1.5 py-0.5 rounded border border-white/[0.08] text-slate-300 font-mono">AES-256</kbd>
           </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          <div className="text-[11px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider">
-            Amigos & Mensagens Diretas
+          <div className="text-[11px] font-bold text-slate-400 px-2 py-1 uppercase tracking-wider flex items-center justify-between">
+            <span>Conversas Criptografadas</span>
+            <span className="text-[10px] font-mono text-slate-500">{dmList.length}</span>
           </div>
-          {['Elena Rostova', 'Lucas Silva', 'Sofia Chen'].map((name, i) => (
-            <button
-              key={name}
-              id={`btn-dm-user-${i}`}
-              className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/[0.06] text-slate-300 hover:text-white transition-colors text-sm font-medium text-left"
-            >
-              <div className="relative">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">
-                  {name[0]}
+          {dmList.map((u) => {
+            const dmChannelId = `dm-${[currentUser.id, u.id].sort().join('_')}`;
+            const isActive = activeChannelId === dmChannelId;
+            return (
+              <button
+                key={u.id}
+                id={`btn-dm-user-${u.id}`}
+                onClick={() => {
+                  onSelectChannel({
+                    id: dmChannelId,
+                    serverId: '',
+                    name: u.name,
+                    type: 'text',
+                    isE2EE: true,
+                    isPrivate: true,
+                    topic: `Conversa direta criptografada ponta a ponta (AES-GCM-256) com ${u.name}`,
+                  });
+                }}
+                className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl transition-all text-sm font-medium text-left cursor-pointer ${
+                  isActive
+                    ? 'bg-indigo-600/20 text-white border-l-2 border-indigo-500 shadow-sm'
+                    : 'hover:bg-white/[0.06] text-slate-300 hover:text-white'
+                }`}
+              >
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="relative shrink-0">
+                    <img
+                      src={u.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${u.id}`}
+                      alt={u.name}
+                      className="w-8 h-8 rounded-full object-cover shadow-sm ring-1 ring-white/10"
+                    />
+                    <div
+                      className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-[#0c0e15] ${
+                        u.status === 'online'
+                          ? 'bg-emerald-500'
+                          : u.status === 'idle'
+                          ? 'bg-amber-500'
+                          : 'bg-slate-500'
+                      }`}
+                    />
+                  </div>
+                  <div className="truncate min-w-0">
+                    <div className="truncate font-semibold text-xs leading-tight">{u.name}</div>
+                    <div className="text-[10px] text-slate-400 truncate mt-0.5">
+                      {u.customStatus || 'Protegido por E2EE'}
+                    </div>
+                  </div>
                 </div>
-                <div className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-500 border-2 border-[#0c0e15]" />
-              </div>
-              <span className="truncate">{name}</span>
-            </button>
-          ))}
+                <div title="Criptografia de ponta a ponta AES-GCM" className="text-emerald-400/80 shrink-0 ml-1">
+                  <Lock className="w-3 h-3" />
+                </div>
+              </button>
+            );
+          })}
         </div>
 
         {/* User profile footer */}
@@ -246,7 +318,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                             }`}
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              {getChannelIcon(channel.type, channel.isE2EE)}
+                              {getChannelIcon(channel.type, channel.isPrivate)}
                               <span className="truncate">{channel.name}</span>
                             </div>
 

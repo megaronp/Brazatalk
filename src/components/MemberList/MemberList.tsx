@@ -179,7 +179,9 @@ export const MemberList: React.FC<MemberListProps> = ({
                       </span>
 
                       {isOwner && (
-                        <Crown className="w-3 h-3 text-amber-400 shrink-0" title="Dono do Servidor" />
+                        <span title="Dono do Servidor" className="inline-flex items-center shrink-0">
+                          <Crown className="w-3 h-3 text-amber-400" />
+                        </span>
                       )}
 
                       {member.isBot && (

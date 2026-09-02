@@ -30,6 +30,8 @@ import { offlineStorage } from './services/offlineStorage';
 import { botEngine } from './services/botEngine';
 import { updateService, UpdateState } from './services/updateService';
 import { screenShareService } from './services/screenShareService';
+import { webrtcService } from './services/webrtcService';
+import { useVoiceCall } from './hooks/useVoiceCall';
 import { Sparkles } from 'lucide-react';
 import { 
   auth, 
@@ -54,6 +56,7 @@ export default function App() {
     avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=braza',
     status: 'online',
     customStatus: '🔥 Conectado no Braza Talk',
+    joinedAt: Date.now(),
   });
 
   const [servers, setServers] = useState<Server[]>([]);
@@ -67,19 +70,83 @@ export default function App() {
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
-  // In-App Notifications
-  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  // In-App & Native Desktop Notifications
+  const pushNotificationToast = (
+    title: string,
+    body: string,
+    type: 'message' | 'mention' | 'voice_join' | 'stream_start'
+  ) => {
+    const newNotif: NotificationItem = {
+      id: `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      title,
+      body,
+      type,
+      timestamp: Date.now(),
+      read: false,
+    };
+    setNotifications((prev) => [newNotif, ...prev.filter((n) => Date.now() - n.timestamp < 10000).slice(0, 3)]);
 
-  // Voice & Video State
-  const [currentVoiceChannelId, setCurrentVoiceChannelId] = useState<string | null>(null);
-  const [voiceParticipants, setVoiceParticipants] = useState<VoiceParticipant[]>([]);
+    // Trigger Native Desktop Notification when permitted
+    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification(`Braza Talk: ${title}`, {
+          body,
+          icon: '/favicon.ico',
+        });
+      } catch {
+        // Fallback gracefully inside restricted contexts
+      }
+    }
+  };
 
-  const [isMuted, setIsMuted] = useState(false);
-  const [isDeafened, setIsDeafened] = useState(false);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
-  const [isCameraOn, setIsCameraOn] = useState(false);
+  const handleSyncOutbox = async () => {
+    try {
+      const syncedCount = await firebaseDb.syncOutbox();
+      if (syncedCount > 0) {
+        setPendingSyncCount(0);
+        pushNotificationToast(
+          'Sincronização Concluída',
+          `${syncedCount} mensagem(ns) pendente(s) sincronizada(s) com o servidor.`,
+          'message'
+        );
+      }
+    } catch (err) {
+      console.warn('Erro ao sincronizar mensagens da fila offline:', err);
+    }
+  };
+
+  // WebSocket reference
+  const wsRef = useRef<WebSocket | null>(null);
+
+  // Real WebRTC Mesh Voice, Audio & Screen Hook
+  const {
+    currentVoiceChannelId,
+    setCurrentVoiceChannelId,
+    voiceParticipants,
+    setVoiceParticipants,
+    isMuted,
+    setIsMuted,
+    isDeafened,
+    isScreenSharing,
+    isCameraOn,
+    screenMediaStream,
+    handleJoinVoice,
+    handleLeaveVoice,
+    handleToggleMute,
+    handleToggleDeafen,
+    handleStartScreenShare,
+    handleStopScreenShare,
+    handleChangeScreenSource,
+    handleToggleCamera,
+  } = useVoiceCall({
+    currentUser,
+    wsRef,
+    pushNotificationToast,
+  });
+
+  const handleToggleScreenShare = isScreenSharing ? handleStopScreenShare : handleStartScreenShare;
+
   const [isWatchingStreamId, setIsWatchingStreamId] = useState<string | null>(null);
-  const [screenMediaStream, setScreenMediaStream] = useState<MediaStream | null>(null);
 
   // Modals
   const [showServerSettings, setShowServerSettings] = useState(false);
@@ -94,9 +161,6 @@ export default function App() {
     open: false,
     mode: 'server',
   });
-
-  // WebSocket reference
-  const wsRef = useRef<WebSocket | null>(null);
 
   // OTA Update Listener & Background Check
   useEffect(() => {
@@ -183,6 +247,7 @@ export default function App() {
       if (serverList.length > 0) {
         setServers(serverList);
         setActiveServerId((prev) => {
+          if (prev === null) return null;
           if (prev && serverList.some((s) => s.id === prev)) return prev;
           return serverList[0].id;
         });
@@ -194,29 +259,123 @@ export default function App() {
     return () => unsubscribeServers();
   }, [firebaseUser]);
 
-  // Active Server & Channel objects
-  const currentServer = servers.find((s) => s.id === activeServerId) || servers[0] || null;
-  const currentChannel =
-    currentServer?.channels.find((c) => c.id === activeChannelId) ||
-    currentServer?.channels[0] || {
-      id: 'chan-fallback',
-      serverId: currentServer?.id || 'server-braza-community',
-      name: 'geral',
-      type: 'text' as ChannelType,
-      isE2EE: false,
-      isPrivate: false,
-    };
+  // List of contacts for Direct Messages
+  const directMessageUsers: User[] = useMemo(() => {
+    const memberMap = new Map<string, User>();
+    servers.forEach((s) => {
+      s.members?.forEach((m) => {
+        if (m.id !== currentUser.id) {
+          memberMap.set(m.id, m);
+        }
+      });
+    });
+    if (memberMap.size === 0) {
+      return [
+        {
+          id: 'user-elena',
+          name: 'Elena Rostova',
+          avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
+          status: 'online',
+          customStatus: 'Desenvolvendo Braza Talk WebRTC',
+        },
+        {
+          id: 'user-lucas',
+          name: 'Lucas Silva',
+          avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
+          status: 'online',
+          customStatus: 'Testando áudio HD SFU',
+        },
+        {
+          id: 'user-sofia',
+          name: 'Sofia Chen',
+          avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150',
+          status: 'idle',
+          customStatus: 'Em reunião no canal de voz',
+        },
+      ];
+    }
+    return Array.from(memberMap.values());
+  }, [servers, currentUser.id]);
+
+  // Active Server & Channel objects (Isolating E2EE exclusively to Direct Messages)
+  const currentServer = activeServerId !== null ? (servers.find((s) => s.id === activeServerId) || servers[0] || null) : null;
+  const currentChannel: Channel = useMemo(() => {
+    if (!currentServer) {
+      // Direct Messages view: 1-on-1 private conversation, always E2EE
+      const activeDMUser =
+        directMessageUsers.find((u) => activeChannelId === `dm-${[currentUser.id, u.id].sort().join('_')}`) ||
+        directMessageUsers[0];
+
+      if (activeDMUser) {
+        return {
+          id: `dm-${[currentUser.id, activeDMUser.id].sort().join('_')}`,
+          serverId: '',
+          name: activeDMUser.name,
+          type: 'text' as ChannelType,
+          isE2EE: true,
+          isPrivate: true,
+          topic: `Conversa direta criptografada ponta a ponta (AES-GCM-256) com ${activeDMUser.name}`,
+        };
+      }
+
+      return {
+        id: 'dm-default',
+        serverId: '',
+        name: 'Mensagens Diretas',
+        type: 'text' as ChannelType,
+        isE2EE: true,
+        isPrivate: true,
+        topic: 'Conversa direta criptografada ponta a ponta (AES-GCM-256)',
+      };
+    }
+
+    // Public community channels: standard unencrypted (or channel default)
+    const chan =
+      currentServer.channels.find((c) => c.id === activeChannelId) ||
+      currentServer.channels[0];
+
+    return (
+      chan || {
+        id: 'chan-fallback',
+        serverId: currentServer.id,
+        name: 'geral',
+        type: 'text' as ChannelType,
+        isE2EE: false,
+        isPrivate: false,
+      }
+    );
+  }, [currentServer, activeChannelId, directMessageUsers, currentUser.id]);
 
   // 3. Real-time Firestore Messages Subscription for active channel
   useEffect(() => {
     if (!firebaseUser || !currentChannel.id || currentChannel.id === 'chan-fallback') return;
 
-    const unsubscribeMessages = firebaseDb.subscribeToChannelMessages(currentChannel.id, (channelMsgs) => {
+    const unsubscribeMessages = firebaseDb.subscribeToChannelMessages(currentChannel.id, async (channelMsgs) => {
+      // Decrypt any E2EE encrypted messages using WebCrypto AES-GCM-256
+      const processedMsgs = await Promise.all(
+        channelMsgs.map(async (msg) => {
+          if (msg.isEncrypted && msg.encryptedContent && msg.encryptionIv) {
+            try {
+              const decrypted = await e2eeService.decryptMessage(
+                msg.encryptedContent,
+                msg.encryptionIv,
+                currentChannel.id
+              );
+              return { ...msg, content: decrypted };
+            } catch (err) {
+              console.warn('Failed to decrypt message:', err);
+              return msg;
+            }
+          }
+          return msg;
+        })
+      );
+
       setMessages((prev) => ({
         ...prev,
-        [currentChannel.id]: channelMsgs,
+        [currentChannel.id]: processedMsgs,
       }));
-      offlineStorage.cacheMessages(channelMsgs);
+      offlineStorage.cacheMessages(processedMsgs);
     });
 
     return () => unsubscribeMessages();
@@ -306,12 +465,23 @@ export default function App() {
           `${data.user.userName} conectou à sala de áudio.`,
           'voice_join'
         );
+        if (currentVoiceChannelId && data.user.userId !== currentUser.id) {
+          webrtcService.initiateConnection(data.user.userId);
+        }
         break;
       }
 
       case 'voice-user-left': {
         setVoiceParticipants((prev) => prev.filter((p) => p.userId !== data.userId));
+        webrtcService.closePeer(data.userId);
         soundEngine.playUserLeave();
+        break;
+      }
+
+      case 'webrtc-signal': {
+        if (data.fromUserId && data.signal) {
+          webrtcService.handleSignal(data.fromUserId, data.signal);
+        }
         break;
       }
 
@@ -385,247 +555,6 @@ export default function App() {
     }
   };
 
-  // Open Microphone Voice Activity Detection (VAD)
-  const vadQuietTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isSpeakingRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    // Only active in Open Mic mode, connected to voice channel, and not muted/deafened
-    if (currentUser.voiceInputMode === 'ptt' || !currentVoiceChannelId || isMuted || isDeafened) {
-      if (isSpeakingRef.current) {
-        isSpeakingRef.current = false;
-        setVoiceParticipants((prev) =>
-          prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
-        );
-        if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'voice-state-update',
-              channelId: currentVoiceChannelId,
-              userId: currentUser.id,
-              isSpeaking: false,
-            })
-          );
-        }
-      }
-      return;
-    }
-
-    let audioCtx: AudioContext | null = null;
-    let analyser: AnalyserNode | null = null;
-    let micStream: MediaStream | null = null;
-    let checkInterval: NodeJS.Timeout | null = null;
-
-    const startVAD = async () => {
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
-
-        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        const source = audioCtx.createMediaStreamSource(micStream);
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-        checkInterval = setInterval(() => {
-          if (!analyser) return;
-          analyser.getByteFrequencyData(dataArray);
-
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
-          }
-          const avg = sum / dataArray.length;
-
-          // Threshold: if average volume is above 10 (out of 255)
-          if (avg > 10) {
-            if (vadQuietTimeoutRef.current) {
-              clearTimeout(vadQuietTimeoutRef.current);
-              vadQuietTimeoutRef.current = null;
-            }
-
-            if (!isSpeakingRef.current) {
-              isSpeakingRef.current = true;
-              setVoiceParticipants((prev) =>
-                prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: true } : p))
-              );
-
-              if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-                wsRef.current.send(
-                  JSON.stringify({
-                    type: 'voice-state-update',
-                    channelId: currentVoiceChannelId,
-                    userId: currentUser.id,
-                    isSpeaking: true,
-                  })
-                );
-              }
-            }
-          } else {
-            // Silence detected: wait 350ms before marking as quiet
-            if (isSpeakingRef.current && !vadQuietTimeoutRef.current) {
-              vadQuietTimeoutRef.current = setTimeout(() => {
-                isSpeakingRef.current = false;
-                vadQuietTimeoutRef.current = null;
-                setVoiceParticipants((prev) =>
-                  prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
-                );
-
-                if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-                  wsRef.current.send(
-                    JSON.stringify({
-                      type: 'voice-state-update',
-                      channelId: currentVoiceChannelId,
-                      userId: currentUser.id,
-                      isSpeaking: false,
-                    })
-                  );
-                }
-              }, 350);
-            }
-          }
-        }, 70);
-      } catch (err) {
-        console.warn('VAD mic init info/permission:', err);
-      }
-    };
-
-    startVAD();
-
-    return () => {
-      if (checkInterval) clearInterval(checkInterval);
-      if (vadQuietTimeoutRef.current) clearTimeout(vadQuietTimeoutRef.current);
-      if (micStream) micStream.getTracks().forEach((t) => t.stop());
-      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
-      if (isSpeakingRef.current) {
-        isSpeakingRef.current = false;
-        setVoiceParticipants((prev) =>
-          prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
-        );
-      }
-    };
-  }, [currentUser.voiceInputMode, currentVoiceChannelId, isMuted, isDeafened, currentUser.id]);
-
-  // Push-to-Talk (PTT) Global Key Listener
-  const pttReleaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const isPttPressedRef = useRef<boolean>(false);
-
-  useEffect(() => {
-    if (currentUser.voiceInputMode !== 'ptt' || !currentVoiceChannelId) {
-      isPttPressedRef.current = false;
-      return;
-    }
-
-    const pttKeyTarget = currentUser.pttKey || 'Space';
-    const releaseDelay = currentUser.pttReleaseDelay ?? 200;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Prevent browser repeat events from flooding state & freezing video streams
-      if (e.repeat) return;
-
-      // Ignore if typing in text inputs or textareas
-      const target = e.target as HTMLElement;
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
-        return;
-      }
-
-      const pressedKey = e.code || e.key;
-      if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
-        if (isPttPressedRef.current) return;
-        isPttPressedRef.current = true;
-
-        if (pttReleaseTimeoutRef.current) {
-          clearTimeout(pttReleaseTimeoutRef.current);
-          pttReleaseTimeoutRef.current = null;
-        }
-
-        // Unmute and mark speaking when key is initially pressed
-        setIsMuted(false);
-        setVoiceParticipants((prev) =>
-          prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: false, isSpeaking: true } : p))
-        );
-
-        if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'voice-state-update',
-              channelId: currentVoiceChannelId,
-              userId: currentUser.id,
-              isMuted: false,
-              isSpeaking: true,
-            })
-          );
-        }
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const pressedKey = e.code || e.key;
-      if (pressedKey === pttKeyTarget || e.key === pttKeyTarget || e.code === pttKeyTarget) {
-        if (!isPttPressedRef.current) return;
-        isPttPressedRef.current = false;
-
-        if (pttReleaseTimeoutRef.current) {
-          clearTimeout(pttReleaseTimeoutRef.current);
-        }
-
-        pttReleaseTimeoutRef.current = setTimeout(() => {
-          setIsMuted(true);
-          setVoiceParticipants((prev) =>
-            prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: true, isSpeaking: false } : p))
-          );
-
-          if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-            wsRef.current.send(
-              JSON.stringify({
-                type: 'voice-state-update',
-                channelId: currentVoiceChannelId,
-                userId: currentUser.id,
-                isMuted: true,
-                isSpeaking: false,
-              })
-            );
-          }
-        }, releaseDelay);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      if (pttReleaseTimeoutRef.current) {
-        clearTimeout(pttReleaseTimeoutRef.current);
-      }
-      isPttPressedRef.current = false;
-    };
-  }, [currentUser.voiceInputMode, currentUser.pttKey, currentUser.pttReleaseDelay, currentVoiceChannelId, currentUser.id]);
-
-  const pushNotificationToast = (
-    title: string,
-    body: string,
-    type: 'message' | 'mention' | 'voice_join' | 'stream_start'
-  ) => {
-    const newNotif: NotificationItem = {
-      id: `toast-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      title,
-      body,
-      type,
-      timestamp: Date.now(),
-      read: false,
-    };
-    setNotifications((prev) => [newNotif, ...prev.filter((n) => Date.now() - n.timestamp < 10000).slice(0, 3)]);
-  };
-
   // 1. Send Message (Firestore + E2EE + Bots)
   const handleSendMessage = async (
     content: string,
@@ -636,9 +565,16 @@ export default function App() {
     if (!firebaseUser) return;
     const isEncrypted = currentChannel.isE2EE || false;
     let encryptedContent = content;
+    let encryptionIv: string | undefined = undefined;
 
     if (isEncrypted) {
-      encryptedContent = e2eeService.encrypt(content, currentChannel.id);
+      try {
+        const encResult = await e2eeService.encryptMessage(content, currentChannel.id);
+        encryptedContent = encResult.ciphertext;
+        encryptionIv = encResult.iv;
+      } catch (err) {
+        console.error('Failed to encrypt message with E2EE AES-GCM:', err);
+      }
     }
 
     const newMsg: Message = {
@@ -652,6 +588,7 @@ export default function App() {
       authorRoleColor: '#6366f1',
       content,
       encryptedContent,
+      encryptionIv,
       isEncrypted,
       attachments: attachments || [],
       reactions: [],
@@ -680,7 +617,8 @@ export default function App() {
     try {
       await firebaseDb.sendMessage(newMsg);
     } catch (e) {
-      console.error('Failed to send message to Firestore:', e);
+      console.warn('Failed to send message immediately to Firestore, saved to offline outbox:', e);
+      setPendingSyncCount((c) => c + 1);
     }
 
     // Process Automated Bots & Slash Commands
@@ -689,41 +627,61 @@ export default function App() {
       const command = parts[0];
       const args = parts.slice(1).join(' ');
 
-      const botReply = botEngine.executeSlashCommand(
+      botEngine.executeSlashCommand(
         command,
         args,
         currentUser.name,
         currentUser.id,
         currentServer?.bots || [],
-        currentChannelMessages
-      );
+        currentChannelMessages,
+        currentChannel.name,
+        currentServer?.members
+      ).then(async (botReply) => {
+        if (!botReply) return;
 
-      if (botReply) {
-        setTimeout(async () => {
-          const botMsg: Message = {
-            id: `bot-msg-${Date.now()}`,
-            channelId: currentChannel.id,
-            serverId: currentServer?.id,
-            authorId: botReply.authorId || 'system-bot',
-            userId: currentUser.id,
-            authorName: botReply.authorName || 'Braza Talk Bot',
-            authorAvatar: botReply.authorAvatar || currentUser.avatar,
-            authorRoleColor: botReply.authorRoleColor || '#6366f1',
-            isBot: true,
-            botTag: botReply.botTag || 'BOT',
-            content: botReply.content || '',
-            reactions: [],
-            timestamp: Date.now(),
-          };
-
+        // If command was /clear, delete the requested amount of messages
+        if (botReply.clearCount && currentChannelMessages.length > 0) {
+          const toDelete = currentChannelMessages.slice(-botReply.clearCount);
+          for (const m of toDelete) {
+            try {
+              await firebaseDb.deleteMessage(m.id, currentServer?.id, currentChannel.id);
+            } catch (err) {
+              console.error('Error deleting message:', err);
+            }
+          }
           setMessages((prev) => ({
             ...prev,
-            [currentChannel.id]: [...(prev[currentChannel.id] || []), botMsg],
+            [currentChannel.id]: (prev[currentChannel.id] || []).filter(
+              (m) => !toDelete.some((d) => d.id === m.id)
+            ),
           }));
-          await firebaseDb.sendMessage(botMsg);
-          soundEngine.playMessage();
-        }, 300);
-      }
+        }
+
+        const botMsg: Message = {
+          id: `bot-msg-${Date.now()}`,
+          channelId: currentChannel.id,
+          serverId: currentServer?.id,
+          authorId: botReply.authorId || 'system-bot',
+          userId: currentUser.id,
+          authorName: botReply.authorName || 'Braza Talk Bot',
+          authorAvatar: botReply.authorAvatar || currentUser.avatar,
+          authorRoleColor: botReply.authorRoleColor || '#6366f1',
+          isBot: true,
+          botTag: botReply.botTag || 'BOT',
+          content: botReply.content || '',
+          reactions: [],
+          timestamp: Date.now(),
+        };
+
+        setMessages((prev) => ({
+          ...prev,
+          [currentChannel.id]: [...(prev[currentChannel.id] || []), botMsg],
+        }));
+        await firebaseDb.sendMessage(botMsg);
+        soundEngine.playMessage();
+      }).catch((err) => {
+        console.error('Slash command execution error:', err);
+      });
     } else {
       // AutoMod check
       botEngine.processIncomingMessage(newMsg, currentServer?.bots || [], (reply) => {
@@ -831,242 +789,6 @@ export default function App() {
     }
   };
 
-  // 5. Voice Room Connect / Disconnect
-  const handleJoinVoice = (channelId: string) => {
-    if (currentVoiceChannelId === channelId) return;
-
-    if (currentVoiceChannelId) {
-      soundEngine.playUserLeave();
-    }
-
-    setCurrentVoiceChannelId(channelId);
-    soundEngine.playUserJoin();
-
-    const myParticipant: VoiceParticipant = {
-      userId: currentUser.id,
-      userName: currentUser.name,
-      userAvatar: currentUser.avatar,
-      channelId,
-      isMuted,
-      isDeafened,
-      isSpeaking: false,
-      isScreenSharing: false,
-      isCameraOn: false,
-      viewers: [],
-      joinedAt: Date.now(),
-    };
-
-    setVoiceParticipants((prev) => [...prev.filter((p) => p.userId !== currentUser.id), myParticipant]);
-
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'join-voice',
-          channelId,
-          userId: currentUser.id,
-          userName: currentUser.name,
-          userAvatar: currentUser.avatar,
-          isMuted,
-          isDeafened,
-        })
-      );
-    }
-  };
-
-  const handleStopScreenShare = () => {
-    if (screenMediaStream) {
-      screenMediaStream.getTracks().forEach((track) => track.stop());
-      setScreenMediaStream(null);
-    }
-    screenShareService.cleanupAll();
-    setIsScreenSharing(false);
-    soundEngine.playScreenShareEnd();
-
-    setVoiceParticipants((prev) =>
-      prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: false } : p))
-    );
-
-    if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'stop-screen-share',
-          channelId: currentVoiceChannelId,
-          userId: currentUser.id,
-          userName: currentUser.name,
-        })
-      );
-    }
-  };
-
-  const handleLeaveVoice = () => {
-    if (!currentVoiceChannelId) return;
-    soundEngine.playUserLeave();
-
-    if (screenMediaStream) {
-      screenMediaStream.getTracks().forEach((track) => track.stop());
-      setScreenMediaStream(null);
-    }
-    screenShareService.cleanupAll();
-
-    setVoiceParticipants((prev) => prev.filter((p) => p.userId !== currentUser.id));
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'leave-voice',
-          channelId: currentVoiceChannelId,
-          userId: currentUser.id,
-          userName: currentUser.name,
-        })
-      );
-    }
-
-    setCurrentVoiceChannelId(null);
-    setIsScreenSharing(false);
-    setIsCameraOn(false);
-  };
-
-  // 6. Voice Controls: Mute, Deafen, Screen Share, Camera
-  const handleToggleMute = () => {
-    const nextMuted = !isMuted;
-    setIsMuted(nextMuted);
-    soundEngine.playMute(nextMuted);
-
-    setVoiceParticipants((prev) =>
-      prev.map((p) => (p.userId === currentUser.id ? { ...p, isMuted: nextMuted } : p))
-    );
-
-    if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'voice-state-update',
-          channelId: currentVoiceChannelId,
-          userId: currentUser.id,
-          isMuted: nextMuted,
-        })
-      );
-    }
-  };
-
-  const handleToggleDeafen = () => {
-    const nextDeafened = !isDeafened;
-    setIsDeafened(nextDeafened);
-    soundEngine.playDeafen(nextDeafened);
-
-    setVoiceParticipants((prev) =>
-      prev.map((p) => (p.userId === currentUser.id ? { ...p, isDeafened: nextDeafened } : p))
-    );
-
-    if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-      wsRef.current.send(
-        JSON.stringify({
-          type: 'voice-state-update',
-          channelId: currentVoiceChannelId,
-          userId: currentUser.id,
-          isDeafened: nextDeafened,
-        })
-      );
-    }
-  };
-
-  const handleToggleScreenShare = async () => {
-    if (isScreenSharing) {
-      handleStopScreenShare();
-      return;
-    }
-
-    try {
-      const result = await screenShareService.startScreenShare(currentUser.name);
-      const stream = result.stream;
-
-      setScreenMediaStream(stream);
-      setIsScreenSharing(true);
-      soundEngine.playScreenShareStart();
-
-      pushNotificationToast(
-        'Transmissão ao Vivo Iniciada',
-        result.type === 'native'
-          ? 'Você selecionou uma tela/janela para transmitir em 60FPS.'
-          : 'Workspace interativo 60FPS iniciado.',
-        'stream_start'
-      );
-
-      // Listen for when the user clicks the browser's native floating "Stop sharing" bar
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.onended = () => {
-          handleStopScreenShare();
-        };
-      }
-
-      setVoiceParticipants((prev) =>
-        prev.map((p) => (p.userId === currentUser.id ? { ...p, isScreenSharing: true } : p))
-      );
-
-      if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'start-screen-share',
-            channelId: currentVoiceChannelId,
-            userId: currentUser.id,
-            userName: currentUser.name,
-          })
-        );
-      }
-    } catch (err: any) {
-      // User cancelled picker dialog or denied permission
-      if (
-        err.name === 'NotAllowedError' ||
-        err.name === 'AbortError' ||
-        err.message?.toLowerCase().includes('permission denied') ||
-        err.message?.toLowerCase().includes('cancelled')
-      ) {
-        // User closed or cancelled the picker dialog - simply return quietly
-        return;
-      }
-
-      console.warn('Screen share error:', err);
-      pushNotificationToast(
-        'Captura de Tela',
-        `Não foi possível iniciar a captura: ${err.message || 'Verifique as permissões de tela do navegador.'}`,
-        'message'
-      );
-    }
-  };
-
-  const handleChangeScreenSource = async () => {
-    try {
-      const result = await screenShareService.startScreenShare(currentUser.name);
-
-      if (screenMediaStream) {
-        screenMediaStream.getTracks().forEach((track) => track.stop());
-      }
-      screenShareService.cleanupAll();
-
-      setScreenMediaStream(result.stream);
-      const videoTrack = result.stream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.onended = () => {
-          handleStopScreenShare();
-        };
-      }
-    } catch (err: any) {
-      if (
-        err.name !== 'NotAllowedError' &&
-        err.name !== 'AbortError' &&
-        !err.message?.toLowerCase().includes('cancelled')
-      ) {
-        console.warn('Change screen error:', err);
-      }
-    }
-  };
-
-  const handleToggleCamera = () => {
-    setIsCameraOn(!isCameraOn);
-    setVoiceParticipants((prev) =>
-      prev.map((p) => (p.userId === currentUser.id ? { ...p, isCameraOn: !isCameraOn } : p))
-    );
-  };
-
   const handleWatchStream = (streamerUserId: string) => {
     setIsWatchingStreamId(streamerUserId);
     if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
@@ -1080,20 +802,6 @@ export default function App() {
         })
       );
     }
-  };
-
-  // 7. Manual Sync Outbox
-  const handleSyncOutbox = async () => {
-    const outbox = await offlineStorage.getOutboxMessages();
-    if (outbox.length === 0) return;
-
-    for (const msg of outbox) {
-      await firebaseDb.sendMessage({ ...msg, pendingSync: false });
-    }
-
-    await offlineStorage.clearOutbox();
-    setPendingSyncCount(0);
-    soundEngine.playMessage();
   };
 
   // 8. Server Management & Role Assignment
@@ -1596,6 +1304,7 @@ export default function App() {
             onToggleDeafen={handleToggleDeafen}
             isMuted={isMuted}
             isDeafened={isDeafened}
+            directMessageUsers={directMessageUsers}
           />
         </div>
 

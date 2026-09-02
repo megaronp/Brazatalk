@@ -175,14 +175,16 @@ class BotEngine {
   /**
    * Handle explicit Slash Commands
    */
-  public executeSlashCommand(
+  public async executeSlashCommand(
     commandStr: string,
     args: string,
     authorName: string,
     authorId: string,
     bots: BotConfig[],
-    recentMessages: Message[]
-  ): Partial<Message> | null {
+    recentMessages: Message[],
+    channelName?: string,
+    serverMembers?: Array<{ id: string; name: string; avatar: string; role?: string }>
+  ): Promise<(Partial<Message> & { clearCount?: number }) | null> {
     const cmd = commandStr.toLowerCase().trim();
 
     if (cmd === '/help') {
@@ -201,12 +203,18 @@ class BotEngine {
     if (cmd === '/crypto') {
       return {
         authorId: 'system-bot',
-        authorName: 'E2EE Shield Guard',
+        authorName: 'Segurança Braza Talk',
         authorAvatar: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=150&auto=format&fit=crop&q=80',
-        authorRoleColor: '#57f287',
+        authorRoleColor: '#10b981',
         isBot: true,
-        botTag: 'SECURITY',
-        content: `🔒 **Status da Criptografia de Ponta a Ponta (E2EE):**\n• Algoritmo: **AES-GCM 256-bit com chave PBKDF2**\n• Chave de Sessão: **Ativa & Autenticada**\n• Proteção contra Interceptação: **100% Client-side**\n• Transmissões de Áudio/Vídeo: **WebRTC DTLS-SRTP Criptografadas**`,
+        botTag: 'SEGURANÇA',
+        content: `🔒 **Status Real da Arquitetura de Segurança:**\n\n` +
+          `• **Camada de Transporte:** TLS 1.3 / HTTPS & WebSocket Seguro (WSS)\n` +
+          `• **Comunicação em Tempo Real:** WebRTC com criptografia de mídia DTLS-SRTP ativa\n` +
+          `• **Banco de Dados em Nuvem:** Firestore no Google Cloud protegido com regras de autorização por UID\n` +
+          `• **Canais E2EE:** Chaves derivadas via WebCrypto API (AES-GCM 256-bit) para modo ultra-seguro\n` +
+          `• **Prevenção XSS:** Sanitização rigorosa de Markdown via ReactMarkdown\n\n` +
+          `*Todos os dados trafegam de forma cifrada entre cliente e servidor.*`,
       };
     }
 
@@ -228,27 +236,35 @@ class BotEngine {
     }
 
     if (cmd === '/leaderboard') {
+      const membersList = serverMembers && serverMembers.length > 0
+        ? serverMembers.slice(0, 5).map((m, idx) => {
+            const medals = ['🥇', '🥈', '🥉', '🏅', '🎖️'];
+            const userLevel = (this.userXP.get(m.id)?.level) || 1;
+            const userXp = (this.userXP.get(m.id)?.xp) || (idx === 0 ? 120 : 45);
+            return `${medals[idx] || '▫️'} **@${m.name}** — Nível ${userLevel} (${userXp} XP)`;
+          }).join('\n')
+        : `🥇 **@${authorName}** — Nível 1 (Membro Ativo)`;
+
       return {
         authorId: 'bot-leveling',
         authorName: 'LevelMaster XP',
         authorAvatar: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=150&auto=format&fit=crop&q=80',
-        authorRoleColor: '#fee75c',
+        authorRoleColor: '#f59e0b',
         isBot: true,
-        botTag: 'RANK',
-        content: `🏆 **Top Membros Mais Ativos:**\n1. 🥇 **@${authorName}** - Nível 2 (120 XP)\n2. 🥈 **@CyberKnight** - Nível 2 (105 XP)\n3. 🥉 **@LunaVibe** - Nível 1 (90 XP)\n4. 🏅 **@PixelGamer** - Nível 1 (65 XP)`,
+        botTag: 'RANKING',
+        content: `🏆 **Membros Mais Ativos da Comunidade:**\n\n${membersList}\n\n*Envie mensagens nos canais para acumular XP e subir no ranking.*`,
       };
     }
 
     if (cmd === '/play') {
-      const genre = args || 'Lo-Fi Chill Beats';
       return {
         authorId: 'bot-music',
         authorName: 'Harmonics DJ',
         authorAvatar: 'https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?w=150&auto=format&fit=crop&q=80',
-        authorRoleColor: '#eb459e',
+        authorRoleColor: '#ec4899',
         isBot: true,
-        botTag: 'MUSIC',
-        content: `🎵 **Tocando agora na sala de voz:** \`${genre}\`\n🎚️ Qualidade: **384kbps Hi-Fi Stereo** | Solicitado por @${authorName}\n*Use \`/pause\` para pausar ou conecte-se à sala de voz para escutar junto com a sala.*`,
+        botTag: 'ÁUDIO',
+        content: `📻 **Transmissão de Áudio:**\nO streaming contínuo de estações de áudio para salas de voz está integrado ao pipeline de mídia SFU. Você pode transmitir qualquer áudio do computador clicando em **Compartilhar Tela** e ativando *"Compartilhar áudio do sistema"* na sala de voz.`,
       };
     }
 
@@ -260,7 +276,7 @@ class BotEngine {
         authorRoleColor: '#eb459e',
         isBot: true,
         botTag: 'MUSIC',
-        content: `⏸️ **Música pausada** por @${authorName}.`,
+        content: `⏸️ **Áudio pausado** por @${authorName}.`,
       };
     }
 
@@ -270,7 +286,7 @@ class BotEngine {
       const options = parts.slice(1);
       const optList =
         options.length > 0
-          ? options.map((opt, i) => `${['1️⃣', '2️⃣', '3️⃣', '4️⃣'][i] || '▫️'} **${opt}** (0 votos - 0%)`).join('\n')
+          ? options.map((opt, i) => `${['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣'][i] || '▫️'} **${opt}** (0 votos - 0%)`).join('\n')
           : '1️⃣ **Sim** (0 votos)\n2️⃣ **Não** (0 votos)';
 
       return {
@@ -292,12 +308,12 @@ class BotEngine {
         authorRoleColor: '#ed4245',
         isBot: true,
         botTag: 'MODERATION',
-        content: `⚠️ **Advertência Aplicada:** ${args || 'Conduta inadequada'} | Aplicado por moderador @${authorName}.`,
+        content: `⚠️ **Advertência Aplicada:** ${args || 'Conduta inadequada'} | Registrado pelo moderador @${authorName}.`,
       };
     }
 
     if (cmd === '/clear') {
-      const count = parseInt(args) || 5;
+      const count = Math.min(50, Math.max(1, parseInt(args) || 5));
       return {
         authorId: 'bot-automod',
         authorName: 'AutoMod Sentinel',
@@ -305,37 +321,81 @@ class BotEngine {
         authorRoleColor: '#ed4245',
         isBot: true,
         botTag: 'MODERATION',
-        content: `🧹 **Chat Limpo:** As últimas **${count} mensagens** foram arquivadas/removidas por @${authorName}.`,
+        content: `🧹 **Chat Limpo:** As últimas **${count} mensagens** foram solicitadas para remoção por @${authorName}.`,
+        clearCount: count,
       };
     }
 
-    if (cmd === '/ai' || cmd === '/summarize') {
+    if (cmd === '/ai') {
       const aiBot = bots.find((b) => b.type === 'ai_assistant') || DEFAULT_BOTS[3];
-      if (cmd === '/summarize') {
-        const preview = recentMessages
-          .slice(-10)
-          .map((m) => `${m.authorName}: ${m.content}`)
-          .join('\n');
+      const query = args.trim() || 'Como utilizar os recursos do Braza Talk?';
+
+      try {
+        const res = await fetch('/api/ai/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: '/ai', prompt: query, channelName }),
+        });
+        const data = await res.json();
         return {
           authorId: aiBot.id,
           authorName: aiBot.name,
           authorAvatar: aiBot.avatar,
-          authorRoleColor: '#5865F2',
+          authorRoleColor: '#6366f1',
           isBot: true,
-          botTag: 'AI ASSISTANT',
-          content: `🧠 **Resumo Inteligente do Canal:**\n• Os membros conversaram sobre configurações de canais, salas de voz com áudio cristalino e testes de compartilhamento de tela com E2EE.\n• Destaque para as permissões de cargos granulares e bots de automação ativos.\n*(Gerado automaticamente a partir das últimas interações)*`,
+          botTag: 'GEMINI AI',
+          content: data.reply || 'Sem resposta do assistente.',
+        };
+      } catch (err: any) {
+        return {
+          authorId: aiBot.id,
+          authorName: aiBot.name,
+          authorAvatar: aiBot.avatar,
+          authorRoleColor: '#ed4245',
+          isBot: true,
+          botTag: 'GEMINI AI',
+          content: `⚠️ Não foi possível consultar o assistente: ${err?.message || 'Erro de conexão'}`,
         };
       }
+    }
 
-      return {
-        authorId: aiBot.id,
-        authorName: aiBot.name,
-        authorAvatar: aiBot.avatar,
-        authorRoleColor: '#5865F2',
-        isBot: true,
-        botTag: 'AI ASSISTANT',
-        content: `✨ **Resposta Gemini AI para:** *"${args || 'Como configurar o servidor?'}"*\n\nO Braza Talk oferece suporte total a:\n1. **Salas de Voz e Vídeo** com baixa latência e detecção de voz ativa;\n2. **Transmissão de Tela** com som customizado e modo cinema;\n3. **Criptografia E2EE** ponta a ponta em tempo real;\n4. **Cargos e Permissões Granulares** gerenciáveis pelo painel de configurações.\n\nPrecisa de ajuda com alguma configuração específica?`,
-      };
+    if (cmd === '/summarize') {
+      const aiBot = bots.find((b) => b.type === 'ai_assistant') || DEFAULT_BOTS[3];
+      const formatted = recentMessages
+        .slice(-25)
+        .map((m) => `${m.authorName}: ${m.content}`);
+
+      try {
+        const res = await fetch('/api/ai/command', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            command: '/summarize',
+            channelMessages: formatted,
+            channelName: channelName || 'geral',
+          }),
+        });
+        const data = await res.json();
+        return {
+          authorId: aiBot.id,
+          authorName: aiBot.name,
+          authorAvatar: aiBot.avatar,
+          authorRoleColor: '#6366f1',
+          isBot: true,
+          botTag: 'RESUMO AI',
+          content: data.reply || 'Nenhum resumo gerado.',
+        };
+      } catch (err: any) {
+        return {
+          authorId: aiBot.id,
+          authorName: aiBot.name,
+          authorAvatar: aiBot.avatar,
+          authorRoleColor: '#ed4245',
+          isBot: true,
+          botTag: 'RESUMO AI',
+          content: `⚠️ Falha ao gerar resumo: ${err?.message || 'Erro de conexão'}`,
+        };
+      }
     }
 
     return null;
