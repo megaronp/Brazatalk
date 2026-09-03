@@ -46,6 +46,7 @@ interface UserSettingsModalProps {
   onUpdateUser: (updated: Partial<User>) => void;
   onOpenInstaller: () => void;
   onSignOut?: () => void;
+  initialTab?: 'profile' | 'voice' | 'e2ee' | 'notifications' | 'storage';
 }
 
 const PRESET_AVATARS = [
@@ -65,8 +66,9 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   onUpdateUser,
   onOpenInstaller,
   onSignOut,
+  initialTab = 'profile',
 }) => {
-  const [activeTab, setActiveTab] = useState<'profile' | 'voice' | 'e2ee' | 'notifications' | 'storage'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'voice' | 'e2ee' | 'notifications' | 'storage'>(initialTab);
   
   // Profile State
   const [name, setName] = useState(currentUser.name);

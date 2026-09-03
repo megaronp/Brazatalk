@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -366,7 +367,7 @@ Gere um resumo em português com:
 - Tom de conversa objetivo e bem formatado em Markdown.`;
 
       const response = await generateWithFallback(ai, {
-        model: 'gemini-3.6-flash',
+        model: 'gemini-3.8-flash',
         contents: promptText,
       });
 
@@ -379,7 +380,7 @@ Gere um resumo em português com:
     // Default /ai <pergunta>
     const userQuery = prompt || 'Como usar o Braza Talk?';
     const response = await generateWithFallback(ai, {
-      model: 'gemini-3.6-flash',
+      model: 'gemini-3.8-flash',
       contents: userQuery,
       config: {
         systemInstruction: 'Você é o Braza Bot, assistente oficial do Braza Talk (aplicativo de comunicação em tempo real com voz, vídeo, chat e canais). Responda com simpatia, precisão, concisão e formatação amigável em Markdown em português.',
@@ -404,21 +405,67 @@ Gere um resumo em português com:
   }
 });
 
-// Serve direct download packages for Desktop
-app.use('/downloads', express.static(path.join(process.cwd(), 'public', 'downloads'), {
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.deb')) {
-      res.setHeader('Content-Type', 'application/vnd.debian.binary-package');
-      res.setHeader('Content-Disposition', 'attachment; filename="brazatalk_2.6.0_all.deb"');
-    } else if (filePath.endsWith('.sh')) {
-      res.setHeader('Content-Type', 'application/x-sh');
-      res.setHeader('Content-Disposition', 'attachment; filename="install-linux.sh"');
-    } else if (filePath.endsWith('.cmd')) {
-      res.setHeader('Content-Type', 'application/x-msdos-program');
-      res.setHeader('Content-Disposition', 'attachment; filename="BrazaTalk-Setup.cmd"');
-    }
-  },
-}));
+// Helper to detect current origin URL for desktop installers
+function getRequestOrigin(req: express.Request): string {
+  const forwardedProto = req.headers['x-forwarded-proto'];
+  const proto = typeof forwardedProto === 'string' ? forwardedProto.split(',')[0].trim() : req.protocol || 'https';
+  const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
+  return `${proto}://${host}`;
+}
+
+// Serve direct download packages for Desktop with dynamic origin injection
+app.get('/downloads/BrazaTalk-Setup.cmd', (req, res) => {
+  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const filePath = path.join(process.cwd(), 'public', 'downloads', 'BrazaTalk-Setup.cmd');
+  try {
+    let content = fs.readFileSync(filePath, 'utf-8');
+    // Replace default URL with client origin
+    content = content.replace(/set "DEFAULT_URL=.*"/, `set "DEFAULT_URL=${origin}"`);
+    res.setHeader('Content-Type', 'application/x-msdos-program');
+    res.setHeader('Content-Disposition', 'attachment; filename="BrazaTalk-Setup.cmd"');
+    return res.send(content);
+  } catch (e) {
+    return res.status(404).send('Installer file not found');
+  }
+});
+
+app.get('/downloads/install-linux.sh', (req, res) => {
+  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const filePath = path.join(process.cwd(), 'public', 'downloads', 'install-linux.sh');
+  try {
+    let content = fs.readFileSync(filePath, 'utf-8');
+    content = content.replace(/APP_URL="\$\{1:-\$\{BRAZATALK_URL:-.*\}\}"/, `APP_URL="\${1:-\${BRAZATALK_URL:-${origin}}}"`);
+    res.setHeader('Content-Type', 'application/x-sh');
+    res.setHeader('Content-Disposition', 'attachment; filename="install-linux.sh"');
+    return res.send(content);
+  } catch (e) {
+    return res.status(404).send('Installer script not found');
+  }
+});
+
+app.get('/downloads/BrazaTalk-macOS.command', (req, res) => {
+  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const filePath = path.join(process.cwd(), 'public', 'downloads', 'BrazaTalk-macOS.command');
+  try {
+    let content = fs.readFileSync(filePath, 'utf-8');
+    content = content.replace(/APP_URL="\$\{1:-\$\{BRAZATALK_URL:-.*\}\}"/, `APP_URL="\${1:-\${BRAZATALK_URL:-${origin}}}"`);
+    res.setHeader('Content-Type', 'application/x-sh');
+    res.setHeader('Content-Disposition', 'attachment; filename="BrazaTalk-macOS.command"');
+    return res.send(content);
+  } catch (e) {
+    return res.status(404).send('Installer command not found');
+  }
+});
+
+app.get('/downloads/brazatalk_2.6.0_all.deb', (req, res) => {
+  const filePath = path.join(process.cwd(), 'public', 'downloads', 'brazatalk_2.6.0_all.deb');
+  res.setHeader('Content-Type', 'application/vnd.debian.binary-package');
+  res.setHeader('Content-Disposition', 'attachment; filename="brazatalk_2.6.0_all.deb"');
+  return res.sendFile(filePath);
+});
+
+// Fallback for static downloads
+app.use('/downloads', express.static(path.join(process.cwd(), 'public', 'downloads')));
 
 app.post('/api/push-notification', (req, res) => {
   const { title, body, userId } = req.body;

@@ -152,6 +152,7 @@ export default function App() {
   // Modals
   const [showServerSettings, setShowServerSettings] = useState(false);
   const [showUserSettings, setShowUserSettings] = useState(false);
+  const [userSettingsInitialTab, setUserSettingsInitialTab] = useState<'profile' | 'voice' | 'e2ee' | 'notifications' | 'storage'>('profile');
   const [showAppInstaller, setShowAppInstaller] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState<{ open: boolean; channelId?: string }>({
     open: false,
@@ -1302,6 +1303,7 @@ export default function App() {
             currentUser={currentUser}
             onOpenUserSettings={() => {
               setMobileNavOpen(false);
+              setUserSettingsInitialTab('profile');
               setShowUserSettings(true);
             }}
             onToggleMute={handleToggleMute}
@@ -1341,7 +1343,10 @@ export default function App() {
               onDeleteMessage={handleDeleteMessage}
               onToggleMemberList={() => setShowMemberList(!showMemberList)}
               showMemberList={showMemberList}
-              onOpenE2EESecurityModal={() => setShowUserSettings(true)}
+              onOpenE2EESecurityModal={() => {
+                setUserSettingsInitialTab('e2ee');
+                setShowUserSettings(true);
+              }}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
               onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
             />
@@ -1421,6 +1426,7 @@ export default function App() {
       {showUserSettings && (
         <UserSettingsModal
           currentUser={currentUser}
+          initialTab={userSettingsInitialTab}
           onClose={() => setShowUserSettings(false)}
           onUpdateUser={handleUpdateUser}
           onSignOut={handleSignOut}
