@@ -27,116 +27,53 @@ export function useVoiceCall({ currentUser, wsRef, pushNotificationToast }: UseV
   const pttReleaseTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isPttPressedRef = useRef<boolean>(false);
 
-  // 1. Microphone Voice Activity Detection (VAD) for Open Mic Mode
+  // 1. Real-time Speaking State synchronization for both local user and remote participants
   useEffect(() => {
-    if (currentUser.voiceInputMode === 'ptt' || !currentVoiceChannelId || isMuted || isDeafened) {
+    if (!currentVoiceChannelId) {
       if (isSpeakingRef.current) {
         isSpeakingRef.current = false;
         setVoiceParticipants((prev) =>
           prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
         );
-        if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'voice-state-update',
-              channelId: currentVoiceChannelId,
-              userId: currentUser.id,
-              isSpeaking: false,
-            })
-          );
-        }
       }
       return;
     }
 
-    let audioCtx: AudioContext | null = null;
-    let analyser: AnalyserNode | null = null;
-    let micStream: MediaStream | null = null;
-    let checkInterval: NodeJS.Timeout | null = null;
+    // Subscribe to unified audio level detections from webrtcService
+    const unsubscribe = webrtcService.onSpeakingChange((userId: string, isSpeaking: boolean) => {
+      // Local user speaking
+      if (userId === currentUser.id) {
+        if (currentUser.voiceInputMode === 'ptt' || isMuted || isDeafened) {
+          return;
+        }
 
-    const startVAD = async () => {
-      try {
-        micStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        });
+        if (isSpeakingRef.current !== isSpeaking) {
+          isSpeakingRef.current = isSpeaking;
+          setVoiceParticipants((prev) =>
+            prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking } : p))
+          );
 
-        audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        analyser = audioCtx.createAnalyser();
-        analyser.fftSize = 256;
-        const source = audioCtx.createMediaStreamSource(micStream);
-        source.connect(analyser);
-
-        const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-        checkInterval = setInterval(() => {
-          if (!analyser) return;
-          analyser.getByteFrequencyData(dataArray);
-
-          let sum = 0;
-          for (let i = 0; i < dataArray.length; i++) {
-            sum += dataArray[i];
+          if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'voice-state-update',
+                channelId: currentVoiceChannelId,
+                userId: currentUser.id,
+                isSpeaking,
+              })
+            );
           }
-          const avg = sum / dataArray.length;
-
-          if (avg > 10) {
-            if (vadQuietTimeoutRef.current) {
-              clearTimeout(vadQuietTimeoutRef.current);
-              vadQuietTimeoutRef.current = null;
-            }
-            if (!isSpeakingRef.current) {
-              isSpeakingRef.current = true;
-              setVoiceParticipants((prev) =>
-                prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: true } : p))
-              );
-              if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-                wsRef.current.send(
-                  JSON.stringify({
-                    type: 'voice-state-update',
-                    channelId: currentVoiceChannelId,
-                    userId: currentUser.id,
-                    isSpeaking: true,
-                  })
-                );
-              }
-            }
-          } else {
-            if (isSpeakingRef.current && !vadQuietTimeoutRef.current) {
-              vadQuietTimeoutRef.current = setTimeout(() => {
-                isSpeakingRef.current = false;
-                setVoiceParticipants((prev) =>
-                  prev.map((p) => (p.userId === currentUser.id ? { ...p, isSpeaking: false } : p))
-                );
-                if (wsRef.current?.readyState === WebSocket.OPEN && currentVoiceChannelId) {
-                  wsRef.current.send(
-                    JSON.stringify({
-                      type: 'voice-state-update',
-                      channelId: currentVoiceChannelId,
-                      userId: currentUser.id,
-                      isSpeaking: false,
-                    })
-                  );
-                }
-                vadQuietTimeoutRef.current = null;
-              }, 400);
-            }
-          }
-        }, 80);
-      } catch (e) {
-        console.warn('VAD AudioContext init skipped or blocked:', e);
+        }
+      } else {
+        // Remote participant speaking (detected directly from their incoming audio stream)
+        setVoiceParticipants((prev) =>
+          prev.map((p) => (p.userId === userId ? { ...p, isSpeaking } : p))
+        );
       }
-    };
-
-    startVAD();
+    });
 
     return () => {
-      if (checkInterval) clearInterval(checkInterval);
-      if (vadQuietTimeoutRef.current) clearTimeout(vadQuietTimeoutRef.current);
-      if (micStream) micStream.getTracks().forEach((t) => t.stop());
-      if (audioCtx && audioCtx.state !== 'closed') audioCtx.close().catch(() => {});
+      unsubscribe();
       if (isSpeakingRef.current) {
         isSpeakingRef.current = false;
         setVoiceParticipants((prev) =>

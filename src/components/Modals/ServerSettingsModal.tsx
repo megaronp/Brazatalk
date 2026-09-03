@@ -290,33 +290,41 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                   <span className="text-[11px] font-bold text-slate-400 uppercase px-2 tracking-wider">
                     Cargos ({roles.length})
                   </span>
-                  {roles.map((role) => (
-                    <button
-                      key={role.id}
-                      onClick={() => setSelectedRoleId(role.id)}
-                      className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-semibold transition-all cursor-pointer ${
-                        role.id === selectedRole?.id
-                          ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-                          : 'hover:bg-white/[0.04] text-slate-300'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 truncate">
-                        <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: role.color }} />
-                        <span className="truncate">{role.name}</span>
-                      </div>
-                      {roles.length > 1 && role.id !== 'role-admin' && (
+                  {roles.map((role) => {
+                    const isSelected = role.id === selectedRole?.id;
+                    return (
+                      <div
+                        key={role.id}
+                        className={`w-full flex items-center justify-between px-3 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+                            : 'hover:bg-white/[0.04] text-slate-300'
+                        }`}
+                      >
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteRole(role.id);
-                          }}
-                          className="text-slate-400 hover:text-rose-400 p-1"
+                          type="button"
+                          onClick={() => setSelectedRoleId(role.id)}
+                          className="flex-1 flex items-center gap-2 truncate text-left cursor-pointer py-1"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <div className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: role.color }} />
+                          <span className="truncate">{role.name}</span>
                         </button>
-                      )}
-                    </button>
-                  ))}
+                        {roles.length > 1 && role.id !== 'role-admin' && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteRole(role.id);
+                            }}
+                            title="Excluir cargo"
+                            className="text-slate-400 hover:text-rose-400 p-1 rounded hover:bg-white/10 transition-colors cursor-pointer shrink-0 ml-1"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* Role Edit & Permission Matrix */}

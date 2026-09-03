@@ -41,7 +41,7 @@ function sanitizeFirestoreData<T>(obj: T): T {
 }
 
 export const firebaseDb = {
-  // Listen to all servers the user is a member of or owns, or public servers
+  // Listen to servers the user is authorized to see (owned, joined, or official public community)
   subscribeToServers(userId: string, callback: (servers: Server[]) => void) {
     // Deliver offline cached servers immediately for zero-latency startup
     offlineStorage.getCachedServers().then((cached) => {
@@ -52,15 +52,107 @@ export const firebaseDb = {
 
     const serversRef = collection(db, 'servers');
     return onSnapshot(serversRef, (snapshot) => {
-      const serverList: Server[] = [];
+      const allServers: Server[] = [];
       snapshot.forEach((docSnap) => {
-        serverList.push({ id: docSnap.id, ...docSnap.data() } as Server);
+        allServers.push({ id: docSnap.id, ...docSnap.data() } as Server);
       });
-      callback(serverList);
-      offlineStorage.cacheServers(serverList).catch(() => {});
+
+      // Filter: users only see servers where they are owner, member, or official public community
+      const userServers = allServers.filter((s) => {
+        if (!userId) return s.id === 'server-braza-community' || (s as any).isPublic === true;
+        const isOwner = s.ownerId === userId;
+        const isMember = Array.isArray(s.members) && s.members.some((m) => m && m.id === userId);
+        const isPublicCommunity = s.id === 'server-braza-community' || (s as any).isPublic === true;
+        return isOwner || isMember || isPublicCommunity;
+      });
+
+      callback(userServers);
+      offlineStorage.cacheServers(userServers).catch(() => {});
     }, (err) => {
       console.error('Firestore subscribeToServers error:', err);
     });
+  },
+
+  // Join a server (via invite code, link, or public explorer)
+  async joinServer(serverId: string, user: User): Promise<Server | null> {
+    try {
+      let targetServerId = serverId.trim();
+      let serverRef = doc(db, 'servers', targetServerId);
+      let serverSnap = await getDoc(serverRef);
+
+      if (!serverSnap.exists()) {
+        // Search across all servers if passed a short invite code or slug
+        const serversRef = collection(db, 'servers');
+        const snap = await getDocs(serversRef);
+        let foundDoc: any = null;
+        snap.forEach((d) => {
+          const s = d.data();
+          if (
+            d.id.toLowerCase() === targetServerId.toLowerCase() ||
+            d.id.replace('server-', '').toLowerCase() === targetServerId.toLowerCase() ||
+            (s.inviteCode && String(s.inviteCode).toLowerCase() === targetServerId.toLowerCase())
+          ) {
+            foundDoc = { id: d.id, ...s };
+          }
+        });
+
+        if (foundDoc) {
+          targetServerId = foundDoc.id;
+          serverRef = doc(db, 'servers', targetServerId);
+          serverSnap = await getDoc(serverRef);
+        } else {
+          return null;
+        }
+      }
+
+      const serverData = { id: serverSnap.id, ...serverSnap.data() } as Server;
+      const members = serverData.members || [];
+      const alreadyMember = members.some((m) => m && m.id === user.id);
+
+      if (!alreadyMember) {
+        const updatedMembers = [...members, user];
+        await setDoc(serverRef, sanitizeFirestoreData({ ...serverData, members: updatedMembers }), { merge: true });
+        serverData.members = updatedMembers;
+      }
+
+      return serverData;
+    } catch (err) {
+      console.error('Error joining server:', err);
+      return null;
+    }
+  },
+
+  // Fetch all discoverable public servers / communities
+  async getAllPublicServers(): Promise<Server[]> {
+    try {
+      const serversRef = collection(db, 'servers');
+      const snapshot = await getDocs(serversRef);
+      const list: Server[] = [];
+      snapshot.forEach((docSnap) => {
+        const s = { id: docSnap.id, ...docSnap.data() } as Server;
+        if (s.id === 'server-braza-community' || (s as any).isPublic === true) {
+          list.push(s);
+        }
+      });
+      return list;
+    } catch (e) {
+      console.warn('Could not fetch public servers:', e);
+      return [];
+    }
+  },
+
+  // Get single server by ID or invite code
+  async getServerById(serverId: string): Promise<Server | null> {
+    try {
+      const serverRef = doc(db, 'servers', serverId);
+      const serverSnap = await getDoc(serverRef);
+      if (serverSnap.exists()) {
+        return { id: serverSnap.id, ...serverSnap.data() } as Server;
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
   },
 
   // Save or update server

@@ -20,6 +20,7 @@ import { UserSettingsModal } from './components/Modals/UserSettingsModal';
 import { AppInstallerModal } from './components/Modals/AppInstallerModal';
 import { CreateServerOrChannelModal } from './components/Modals/CreateServerOrChannelModal';
 import { InviteModal } from './components/Modals/InviteModal';
+import { ExploreServersModal } from './components/Modals/ExploreServersModal';
 import { AuthModal } from './components/Modals/AuthModal';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { PWAInstallBanner } from './components/Common/PWAInstallBanner';
@@ -50,13 +51,23 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState<boolean>(true);
 
   // App State
-  const [currentUser, setCurrentUser] = useState<User>({
-    id: 'guest',
-    name: 'Carregando...',
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=braza',
-    status: 'online',
-    customStatus: '🔥 Conectado no Braza Talk',
-    joinedAt: Date.now(),
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    let savedMicId = 'default';
+    let savedSpeakerId = 'default';
+    try {
+      savedMicId = localStorage.getItem('braza_audio_input_id') || 'default';
+      savedSpeakerId = localStorage.getItem('braza_audio_output_id') || 'default';
+    } catch {}
+    return {
+      id: 'guest',
+      name: 'Carregando...',
+      avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=braza',
+      status: 'online',
+      customStatus: '🔥 Conectado no Braza Talk',
+      joinedAt: Date.now(),
+      selectedMicId: savedMicId,
+      selectedSpeakerId: savedSpeakerId,
+    };
   });
 
   const [servers, setServers] = useState<Server[]>([]);
@@ -157,6 +168,7 @@ export default function App() {
   const [showInviteModal, setShowInviteModal] = useState<{ open: boolean; channelId?: string }>({
     open: false,
   });
+  const [showExploreModal, setShowExploreModal] = useState(false);
   const [appInstallerTab, setAppInstallerTab] = useState<'install' | 'update'>('install');
   const [updateInfo, setUpdateInfo] = useState<UpdateState>(updateService.getState());
   const [createModal, setCreateModal] = useState<{ open: boolean; mode: 'server' | 'channel'; categoryId?: string }>({
@@ -206,6 +218,8 @@ export default function App() {
           voiceInputMode: userData?.voiceInputMode || 'open',
           pttKey: userData?.pttKey || 'Space',
           pttReleaseDelay: userData?.pttReleaseDelay ?? 200,
+          selectedMicId: userData?.selectedMicId || localStorage.getItem('braza_audio_input_id') || 'default',
+          selectedSpeakerId: userData?.selectedSpeakerId || localStorage.getItem('braza_audio_output_id') || 'default',
         };
 
         setCurrentUser((prev) => {
@@ -217,6 +231,8 @@ export default function App() {
               customStatus: prev.customStatus || appUser.customStatus,
               bio: prev.bio || appUser.bio,
               status: prev.status || appUser.status,
+              selectedMicId: prev.selectedMicId || appUser.selectedMicId,
+              selectedSpeakerId: prev.selectedSpeakerId || appUser.selectedSpeakerId,
             };
           }
           return appUser;
@@ -260,6 +276,65 @@ export default function App() {
 
     return () => unsubscribeServers();
   }, [firebaseUser]);
+
+  // 3. Handle Invite via URL parameter or pathname
+  useEffect(() => {
+    if (!firebaseUser || !currentUser.id) return;
+
+    const urlParams = new URLSearchParams(window.location.search);
+    let inviteServerId = urlParams.get('invite');
+    const inviteChannelId = urlParams.get('channel');
+
+    if (!inviteServerId && window.location.pathname.startsWith('/invite/')) {
+      const slug = window.location.pathname.replace('/invite/', '').trim();
+      if (slug) inviteServerId = slug;
+    }
+
+    if (inviteServerId) {
+      firebaseDb.joinServer(inviteServerId, currentUser).then((joinedServer) => {
+        if (joinedServer) {
+          setActiveServerId(joinedServer.id);
+          if (inviteChannelId && joinedServer.channels?.some((c) => c.id === inviteChannelId)) {
+            setActiveChannelId(inviteChannelId);
+          } else if (joinedServer.channels && joinedServer.channels[0]) {
+            setActiveChannelId(joinedServer.channels[0].id);
+          }
+          pushNotificationToast(
+            'Convite Aceito!',
+            `Você entrou no servidor "${joinedServer.name}" com sucesso.`,
+            'voice_join'
+          );
+          soundEngine.playUserJoin();
+          window.history.replaceState(
+            {},
+            document.title,
+            window.location.pathname.startsWith('/invite/') ? '/' : window.location.pathname
+          );
+        }
+      }).catch((e) => {
+        console.warn('Could not process URL invite:', e);
+      });
+    }
+  }, [firebaseUser, currentUser]);
+
+  const handleJoinServer = async (serverIdOrCode: string): Promise<boolean> => {
+    if (!currentUser.id) return false;
+    try {
+      const server = await firebaseDb.joinServer(serverIdOrCode, currentUser);
+      if (server) {
+        setActiveServerId(server.id);
+        if (server.channels && server.channels.length > 0) {
+          setActiveChannelId(server.channels[0].id);
+        }
+        pushNotificationToast('Sucesso!', `Você entrou no servidor "${server.name}"!`, 'voice_join');
+        return true;
+      }
+      return false;
+    } catch (e) {
+      console.error('Error joining server:', e);
+      return false;
+    }
+  };
 
   // List of contacts for Direct Messages
   const directMessageUsers: User[] = useMemo(() => {
@@ -436,7 +511,18 @@ export default function App() {
 
     connectWS();
 
+    // Auto-sync room participants whenever tab is focused or periodically
+    const handleWindowFocus = () => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'get-voice-state' }));
+      }
+    };
+    window.addEventListener('focus', handleWindowFocus);
+    const syncTimer = setInterval(handleWindowFocus, 5000);
+
     return () => {
+      window.removeEventListener('focus', handleWindowFocus);
+      clearInterval(syncTimer);
       unsubscribeNetwork();
       wsRef.current?.close();
     };
@@ -445,6 +531,7 @@ export default function App() {
   // Handle incoming WebSocket broadcasts (Voice & Signals)
   const handleIncomingWSEvent = (data: any) => {
     switch (data.type) {
+      case 'voice-participants-sync':
       case 'init-voice-state': {
         if (data.participants && Array.isArray(data.participants)) {
           setVoiceParticipants(data.participants);
@@ -1036,6 +1123,26 @@ export default function App() {
     setFirebaseUser(null);
   };
 
+  const handleLeaveVoiceAndNavigateToGeneral = () => {
+    handleLeaveVoice();
+    // Automatically navigate user to the general text chat channel upon leaving voice room
+    if (currentServer && currentServer.channels && currentServer.channels.length > 0) {
+      const generalChannel =
+        currentServer.channels.find(
+          (c) =>
+            c.type === 'text' &&
+            (c.name.toLowerCase() === 'geral' ||
+              c.name.toLowerCase() === 'chat-geral' ||
+              c.name.toLowerCase() === 'general' ||
+              c.name.toLowerCase().includes('geral'))
+        ) || currentServer.channels.find((c) => c.type === 'text');
+
+      if (generalChannel) {
+        setActiveChannelId(generalChannel.id);
+      }
+    }
+  };
+
   const isVoiceActiveChannel = currentChannel.type === 'voice' || currentChannel.type === 'stage';
 
   // Ensure voice participants list for sidebar, stage, and controls bar always contains current user when in voice
@@ -1271,6 +1378,10 @@ export default function App() {
               setMobileNavOpen(false);
               setShowAppInstaller(true);
             }}
+            onOpenExplore={() => {
+              setMobileNavOpen(false);
+              setShowExploreModal(true);
+            }}
           />
 
           {/* 2. Channels Sidebar */}
@@ -1287,7 +1398,7 @@ export default function App() {
               handleJoinVoice(cId);
               setMobileNavOpen(false);
             }}
-            onLeaveVoice={handleLeaveVoice}
+            onLeaveVoice={handleLeaveVoiceAndNavigateToGeneral}
             onOpenServerSettings={() => {
               setMobileNavOpen(false);
               setShowServerSettings(true);
@@ -1331,6 +1442,7 @@ export default function App() {
               onChangeScreenSource={handleChangeScreenSource}
               onToggleScreenShare={handleToggleScreenShare}
               onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
+              onLeaveVoice={handleLeaveVoiceAndNavigateToGeneral}
             />
           ) : (
             <ChatArea
@@ -1367,7 +1479,7 @@ export default function App() {
               onToggleDeafen={handleToggleDeafen}
               onToggleScreenShare={handleToggleScreenShare}
               onToggleCamera={handleToggleCamera}
-              onLeaveVoice={handleLeaveVoice}
+              onLeaveVoice={handleLeaveVoiceAndNavigateToGeneral}
             />
           )}
         </div>
@@ -1463,12 +1575,13 @@ export default function App() {
               : currentChannel
           }
           currentUser={currentUser}
+          availableUsers={directMessageUsers}
           onClose={() => setShowInviteModal({ open: false })}
-          onSendDirectInvite={(targetUserName, channelName) => {
+          onSendDirectInvite={(targetUser, channelName) => {
             const newNotif: NotificationItem = {
               id: `notif-${Date.now()}`,
               title: 'Convite Enviado!',
-              body: `Convite para o canal #${channelName} enviado para ${targetUserName}.`,
+              body: `Convite para ${currentServer?.name || 'servidor'} enviado para ${targetUser.name}.`,
               type: 'mention',
               timestamp: Date.now(),
               channelId: showInviteModal.channelId || currentChannel.id,
@@ -1476,7 +1589,37 @@ export default function App() {
               read: false,
             };
             setNotifications((prev) => [newNotif, ...prev.slice(0, 4)]);
+            pushNotificationToast('Convite Enviado', `Convite enviado para ${targetUser.name}!`, 'mention');
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(
+                JSON.stringify({
+                  type: 'server-invite',
+                  targetUserId: targetUser.id,
+                  senderName: currentUser.name,
+                  serverName: currentServer?.name,
+                  serverId: currentServer?.id,
+                  channelId: showInviteModal.channelId || currentChannel.id,
+                })
+              );
+            }
           }}
+        />
+      )}
+
+      {showExploreModal && (
+        <ExploreServersModal
+          isOpen={showExploreModal}
+          onClose={() => setShowExploreModal(false)}
+          currentUser={currentUser}
+          userServers={servers}
+          onSelectServer={(sId) => {
+            setActiveServerId(sId);
+            const s = servers.find((srv) => srv.id === sId);
+            if (s && s.channels && s.channels.length > 0) {
+              setActiveChannelId(s.channels[0].id);
+            }
+          }}
+          onJoinServer={handleJoinServer}
         />
       )}
     </div>

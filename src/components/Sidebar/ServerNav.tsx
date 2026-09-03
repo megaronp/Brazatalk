@@ -18,6 +18,7 @@ export const ServerNav: React.FC<ServerNavProps> = ({
   onSelectServer,
   onOpenCreateServer,
   onOpenInstaller,
+  onOpenExplore,
 }) => {
   const [updateState, setUpdateState] = useState<UpdateState>(updateService.getState());
 
@@ -115,8 +116,8 @@ export const ServerNav: React.FC<ServerNavProps> = ({
       <div className="relative group flex items-center justify-center w-full">
         <button
           id="btn-explore-servers"
-          onClick={() => {}}
-          title="Explorar Comunidades"
+          onClick={onOpenExplore}
+          title="Buscar e Explorar Comunidades"
           className="w-12 h-12 rounded-[22px] bg-[#12141d] text-slate-400 hover:rounded-[16px] hover:bg-emerald-500 hover:text-slate-950 flex items-center justify-center transition-all duration-300 cursor-pointer border border-white/[0.04]"
         >
           <Compass className="w-5 h-5" />

@@ -14,6 +14,8 @@ import {
   Hash,
   Volume2,
   Radio,
+  Users,
+  Key,
 } from 'lucide-react';
 import { Server, Channel, User } from '../../types';
 import { soundEngine } from '../../services/soundEngine';
@@ -22,68 +24,73 @@ interface InviteModalProps {
   server?: Server | null;
   channel?: Channel | null;
   currentUser: User;
+  availableUsers?: User[];
   onClose: () => void;
-  onSendDirectInvite?: (targetUserName: string, channelName: string) => void;
+  onSendDirectInvite?: (targetUser: User, channelName: string) => void;
 }
 
 export const InviteModal: React.FC<InviteModalProps> = ({
   server,
   channel,
   currentUser,
+  availableUsers = [],
   onClose,
   onSendDirectInvite,
 }) => {
-  const [copied, setCopied] = useState(false);
+  const [copiedLink, setCopiedLink] = useState(false);
+  const [copiedCode, setCopiedCode] = useState(false);
   const [selectedChannelId, setSelectedChannelId] = useState<string>(
     channel?.id || server?.channels[0]?.id || 'chan-geral'
   );
   const [expireOption, setExpireOption] = useState<string>('never');
   const [maxUsesOption, setMaxUsesOption] = useState<string>('unlimited');
-  const [isTemporary, setIsTemporary] = useState<boolean>(false);
   const [showQr, setShowQr] = useState<boolean>(false);
   const [invitedUsers, setInvitedUsers] = useState<Record<string, boolean>>({});
 
-  // Direct contacts list to invite
-  const directFriends = [
-    { id: 'f-1', name: 'Lucas Silva', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=lucas', status: 'online' },
-    { id: 'f-2', name: 'Elena Rostova', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=elena', status: 'online' },
-    { id: 'f-3', name: 'Sofia Chen', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=sofia', status: 'idle' },
-    { id: 'f-4', name: 'Gabriel Torres', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=gabriel', status: 'dnd' },
-    { id: 'f-5', name: 'Beatriz Lima', avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=beatriz', status: 'online' },
-  ];
+  const currentChannelObj = server?.channels?.find((c) => c.id === selectedChannelId) || channel;
 
-  const currentChannelObj = server?.channels.find((c) => c.id === selectedChannelId) || channel;
+  // Real invite code and URL
+  const serverId = server?.id || 'server-braza-community';
+  const shortCode = serverId.startsWith('server-') ? serverId.replace('server-', '') : serverId;
+  const inviteUrl = `${window.location.origin}${window.location.pathname}?invite=${encodeURIComponent(serverId)}&channel=${encodeURIComponent(selectedChannelId)}`;
 
-  // Generate clean invite link
-  const inviteCode = `${server?.id ? server.id.slice(-6) : 'braza'}-${selectedChannelId.slice(-4)}`;
-  const inviteUrl = `${window.location.origin}/invite/${inviteCode}`;
+  // Filter available contacts (exclude current user)
+  const contactsList = availableUsers.filter((u) => u && u.id && u.id !== currentUser.id);
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(inviteUrl).then(() => {
-      setCopied(true);
+      setCopiedLink(true);
       soundEngine.playMessage();
-      setTimeout(() => setCopied(false), 2500);
+      setTimeout(() => setCopiedLink(false), 2500);
     });
   };
 
-  const handleInviteFriend = (friendName: string) => {
-    setInvitedUsers((prev) => ({ ...prev, [friendName]: true }));
+  const handleCopyCode = () => {
+    navigator.clipboard.writeText(shortCode).then(() => {
+      setCopiedCode(true);
+      soundEngine.playMessage();
+      setTimeout(() => setCopiedCode(false), 2500);
+    });
+  };
+
+  const handleInviteFriend = (friend: User) => {
+    setInvitedUsers((prev) => ({ ...prev, [friend.id]: true }));
     soundEngine.playUserJoin();
     if (onSendDirectInvite) {
-      onSendDirectInvite(friendName, currentChannelObj?.name || 'Canal');
+      onSendDirectInvite(friend, currentChannelObj?.name || 'Canal');
     }
   };
 
   const handleShareWhatsApp = () => {
     const text = encodeURIComponent(
-      `🔥 Entre no meu canal "${currentChannelObj?.name || 'Voz'}" no Braza Talk!\nLink de acesso rápido com áudio HD e E2EE: ${inviteUrl}`
+      `🔥 Entre no meu servidor "${server?.name || 'Braza Talk'}" no canal "${currentChannelObj?.name || 'Voz'}"!\nLink de acesso rápido com voz HD sem picotar e E2EE:\n${inviteUrl}`
     );
     window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
   };
 
   const handleShareTelegram = () => {
     const text = encodeURIComponent(
-      `🔥 Entre no meu canal "${currentChannelObj?.name || 'Voz'}" no Braza Talk!`
+      `🔥 Entre no servidor "${server?.name || 'Braza Talk'}" no Braza Talk!`
     );
     window.open(`https://t.me/share/url?url=${encodeURIComponent(inviteUrl)}&text=${text}`, '_blank');
   };
@@ -107,7 +114,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
             </div>
             <div>
               <h3 className="text-base font-bold text-white tracking-tight">
-                Convidar amigos para {server ? server.name : 'o canal'}
+                Convidar amigos para {server ? server.name : 'o servidor'}
               </h3>
               <p className="text-xs text-slate-400">
                 Canal de destino: <span className="text-indigo-300 font-semibold">{currentChannelObj ? `#${currentChannelObj.name}` : 'Geral'}</span>
@@ -147,69 +154,96 @@ export const InviteModal: React.FC<InviteModalProps> = ({
             </div>
           )}
 
-          {/* Quick Direct Invite to Friends */}
+          {/* Quick Direct Invite to Active Users / Platform Friends */}
           <div>
-            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
-              Convidar amigos ativos:
-            </label>
-            <div className="space-y-1.5 max-h-40 overflow-y-auto custom-scrollbar pr-1">
-              {directFriends.map((friend) => {
-                const isInvited = invitedUsers[friend.name];
-                return (
-                  <div
-                    key={friend.id}
-                    className="flex items-center justify-between p-2 rounded-xl bg-[#151926] border border-white/[0.04] hover:border-white/[0.08] transition-colors"
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0">
-                      <div className="relative">
-                        <img
-                          src={friend.avatar}
-                          alt={friend.name}
-                          className="w-8 h-8 rounded-full object-cover bg-indigo-950"
-                        />
-                        <span
-                          className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-[#151926] ${
-                            friend.status === 'online'
-                              ? 'bg-emerald-400'
-                              : friend.status === 'idle'
-                              ? 'bg-amber-400'
-                              : 'bg-rose-400'
-                          }`}
-                        />
-                      </div>
-                      <span className="text-xs font-semibold text-white truncate">{friend.name}</span>
-                    </div>
-
-                    <button
-                      id={`btn-invite-friend-${friend.id}`}
-                      onClick={() => handleInviteFriend(friend.name)}
-                      disabled={isInvited}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                        isInvited
-                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
-                      }`}
-                    >
-                      {isInvited ? (
-                        <>
-                          <Check className="w-3.5 h-3.5" /> Convidado
-                        </>
-                      ) : (
-                        <>
-                          <Send className="w-3 h-3" /> Convidar
-                        </>
-                      )}
-                    </button>
-                  </div>
-                );
-              })}
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
+                <Users className="w-3.5 h-3.5 text-indigo-400" />
+                Usuários e Contatos Ativos ({contactsList.length}):
+              </label>
             </div>
+
+            {contactsList.length === 0 ? (
+              <div className="p-3 bg-[#151926] rounded-xl border border-white/[0.04] text-center text-xs text-slate-400">
+                Nenhum outro usuário ativo no momento. Envie o link ou código abaixo!
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-44 overflow-y-auto custom-scrollbar pr-1">
+                {contactsList.map((friend) => {
+                  const isAlreadyMember = Boolean(
+                    server?.members?.some((m) => m && m.id === friend.id)
+                  );
+                  const isInvited = Boolean(invitedUsers[friend.id]);
+
+                  return (
+                    <div
+                      key={friend.id}
+                      className="flex items-center justify-between p-2 rounded-xl bg-[#151926] border border-white/[0.04] hover:border-white/[0.08] transition-colors"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="relative shrink-0">
+                          <img
+                            src={friend.avatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${friend.id}`}
+                            alt={friend.name}
+                            className="w-8 h-8 rounded-full object-cover bg-indigo-950 ring-1 ring-white/10"
+                          />
+                          <span
+                            className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-[#151926] ${
+                              friend.status === 'online'
+                                ? 'bg-emerald-400'
+                                : friend.status === 'idle'
+                                ? 'bg-amber-400'
+                                : 'bg-slate-500'
+                            }`}
+                          />
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-white truncate">{friend.name}</div>
+                          <div className="text-[10px] text-slate-400 truncate">
+                            {friend.customStatus || (friend.status === 'online' ? 'Disponível' : 'Ausente')}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div>
+                        {isAlreadyMember ? (
+                          <span className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/20">
+                            Já é Membro
+                          </span>
+                        ) : (
+                          <button
+                            id={`btn-invite-friend-${friend.id}`}
+                            onClick={() => handleInviteFriend(friend)}
+                            disabled={isInvited}
+                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                              isInvited
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
+                            }`}
+                          >
+                            {isInvited ? (
+                              <>
+                                <Check className="w-3.5 h-3.5" /> Enviado
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3 h-3" /> Convidar
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* Shareable Link Box */}
           <div>
             <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
-              Ou envie o link de convite:
+              Link de convite direto:
             </label>
             <div className="flex items-center gap-2">
               <div className="flex-1 bg-[#161a27] border border-white/10 rounded-xl px-3.5 py-2.5 text-xs text-indigo-300 font-mono truncate select-all">
@@ -219,13 +253,38 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                 id="btn-copy-invite-link"
                 onClick={handleCopyLink}
                 className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 shadow-lg ${
-                  copied
+                  copiedLink
                     ? 'bg-emerald-500 text-slate-950 shadow-emerald-500/20'
                     : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/30'
                 }`}
               >
-                {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                <span>{copied ? 'Copiado!' : 'Copiar'}</span>
+                {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                <span>{copiedLink ? 'Copiado!' : 'Copiar Link'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Short Invite Code Box */}
+          <div>
+            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+              Código de Convite Rápido:
+            </label>
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-[#161a27] border border-white/10 rounded-xl px-3.5 py-2 text-xs text-white font-mono font-bold tracking-wider truncate flex items-center gap-2">
+                <Key className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                <span>{shortCode}</span>
+              </div>
+              <button
+                id="btn-copy-invite-code"
+                onClick={handleCopyCode}
+                className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shrink-0 border ${
+                  copiedCode
+                    ? 'bg-emerald-500 text-slate-950 border-emerald-500'
+                    : 'bg-white/[0.06] hover:bg-white/[0.12] text-white border-white/10'
+                }`}
+              >
+                {copiedCode ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                <span>{copiedCode ? 'Copiado!' : 'Copiar Código'}</span>
               </button>
             </div>
           </div>
@@ -275,7 +334,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
                 />
               </div>
               <p className="text-[11px] text-slate-400 text-center">
-                Aponte a câmera do celular para entrar diretamente na sala com voz HD
+                Aponte a câmera do celular para entrar diretamente no servidor
               </p>
             </div>
           )}

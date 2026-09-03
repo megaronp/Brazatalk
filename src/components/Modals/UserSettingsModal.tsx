@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { e2eeService } from '../../services/e2eeService';
 import { soundEngine } from '../../services/soundEngine';
+import { webrtcService } from '../../services/webrtcService';
 import { 
   auth, 
   sendPasswordResetEmail, 
@@ -96,8 +97,21 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   // Audio testing & Devices
   const [audioInputDevices, setAudioInputDevices] = useState<MediaDeviceInfo[]>([]);
   const [audioOutputDevices, setAudioOutputDevices] = useState<MediaDeviceInfo[]>([]);
-  const [selectedMicId, setSelectedMicId] = useState<string>('default');
-  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>('default');
+  const [selectedMicId, setSelectedMicId] = useState<string>(() => {
+    try {
+      return currentUser.selectedMicId || localStorage.getItem('braza_audio_input_id') || 'default';
+    } catch {
+      return 'default';
+    }
+  });
+  const [selectedSpeakerId, setSelectedSpeakerId] = useState<string>(() => {
+    try {
+      return currentUser.selectedSpeakerId || localStorage.getItem('braza_audio_output_id') || 'default';
+    } catch {
+      return 'default';
+    }
+  });
+  const [audioSettingsSavedToast, setAudioSettingsSavedToast] = useState(false);
 
   const [micTesting, setMicTesting] = useState(false);
   const [micVolumeLevel, setMicVolumeLevel] = useState<number>(0);
@@ -374,6 +388,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
   };
 
   const handleSaveProfile = async () => {
+    // Save audio device preferences to localStorage & webrtcService
+    try {
+      localStorage.setItem('braza_audio_input_id', selectedMicId);
+      localStorage.setItem('braza_audio_output_id', selectedSpeakerId);
+    } catch {}
+    webrtcService.setAudioInputDevice(selectedMicId);
+    webrtcService.setAudioOutputDevice(selectedSpeakerId);
+
     // Sync Firebase Auth displayName & photoURL if authenticated
     if (auth.currentUser) {
       try {
@@ -396,9 +418,15 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
       voiceInputMode,
       pttKey,
       pttReleaseDelay,
+      selectedMicId,
+      selectedSpeakerId,
     });
-    stopMicTest();
-    onClose();
+    setAudioSettingsSavedToast(true);
+    setTimeout(() => {
+      setAudioSettingsSavedToast(false);
+      stopMicTest();
+      onClose();
+    }, 400);
   };
 
   const handleRandomizeAvatar = () => {
@@ -965,7 +993,12 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                       id="select-mic-device"
                       value={selectedMicId}
                       onChange={(e) => {
-                        setSelectedMicId(e.target.value);
+                        const newId = e.target.value;
+                        setSelectedMicId(newId);
+                        try {
+                          localStorage.setItem('braza_audio_input_id', newId);
+                        } catch {}
+                        webrtcService.setAudioInputDevice(newId);
                         if (micTesting) {
                           stopMicTest();
                         }
@@ -989,7 +1022,14 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                     <select
                       id="select-speaker-device"
                       value={selectedSpeakerId}
-                      onChange={(e) => setSelectedSpeakerId(e.target.value)}
+                      onChange={(e) => {
+                        const newId = e.target.value;
+                        setSelectedSpeakerId(newId);
+                        try {
+                          localStorage.setItem('braza_audio_output_id', newId);
+                        } catch {}
+                        webrtcService.setAudioOutputDevice(newId);
+                      }}
                       className="w-full bg-[#161a27] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 cursor-pointer"
                     >
                       <option value="default">Alto-falante Padrão do Sistema</option>
@@ -1175,7 +1215,13 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
               </div>
 
               {/* Save Voice Configuration Button */}
-              <div className="pt-2 flex justify-end">
+              <div className="pt-2 flex items-center justify-between">
+                {audioSettingsSavedToast ? (
+                  <span className="text-xs text-emerald-400 font-semibold flex items-center gap-1.5 animate-pulse">
+                    <Check className="w-4 h-4" />
+                    Configurações de microfone e fone salvas com sucesso!
+                  </span>
+                ) : <div />}
                 <button
                   id="btn-save-voice-settings"
                   onClick={handleSaveProfile}

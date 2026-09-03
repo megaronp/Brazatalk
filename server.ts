@@ -37,9 +37,9 @@ async function generateWithFallback(ai: GoogleGenAI, params: any) {
 // In-memory real-time state for connected clients & voice rooms
 interface ConnectedClient {
   ws: WebSocket;
-  userId: string;
-  userName: string;
-  userAvatar: string;
+  userId?: string;
+  userName?: string;
+  userAvatar?: string;
   currentChannelId?: string;
   isMuted?: boolean;
   isDeafened?: boolean;
@@ -48,7 +48,22 @@ interface ConnectedClient {
   isSpeaking?: boolean;
 }
 
+interface ServerVoiceParticipant {
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  channelId: string;
+  isMuted: boolean;
+  isDeafened: boolean;
+  isSpeaking: boolean;
+  isScreenSharing: boolean;
+  isCameraOn: boolean;
+  viewers: string[];
+  joinedAt: number;
+}
+
 const clients = new Map<string, ConnectedClient>();
+const voiceParticipants = new Map<string, ServerVoiceParticipant>();
 
 // WebSocket Server
 const wss = new WebSocketServer({ server });
@@ -73,14 +88,35 @@ function broadcastToChannel(channelId: string, data: object, excludeWs?: WebSock
 
 wss.on('connection', (ws) => {
   let clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+  clients.set(clientId, { ws });
+
+  // Immediately send current live voice room participants so the user sees members before entering
+  try {
+    ws.send(JSON.stringify({
+      type: 'init-voice-state',
+      participants: Array.from(voiceParticipants.values()),
+    }));
+  } catch {}
 
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
 
       switch (msg.type) {
+        case 'get-voice-state': {
+          ws.send(JSON.stringify({
+            type: 'init-voice-state',
+            participants: Array.from(voiceParticipants.values()),
+          }));
+          break;
+        }
+
         case 'auth': {
+          const oldClientId = clientId;
           clientId = msg.userId || clientId;
+          if (oldClientId !== clientId) {
+            clients.delete(oldClientId);
+          }
           clients.set(clientId, {
             ws,
             userId: msg.userId,
@@ -90,23 +126,10 @@ wss.on('connection', (ws) => {
           });
 
           // Send current active voice participants
-          const participants = Array.from(clients.values())
-            .filter((c) => !!c.currentChannelId)
-            .map((c) => ({
-              userId: c.userId,
-              userName: c.userName,
-              userAvatar: c.userAvatar,
-              channelId: c.currentChannelId,
-              isMuted: !!c.isMuted,
-              isDeafened: !!c.isDeafened,
-              isSpeaking: !!c.isSpeaking,
-              isScreenSharing: !!c.isScreenSharing,
-              isCameraOn: !!c.isStreamingVideo,
-              viewers: [],
-              joinedAt: Date.now(),
-            }));
-
-          ws.send(JSON.stringify({ type: 'init-voice-state', participants }));
+          ws.send(JSON.stringify({
+            type: 'init-voice-state',
+            participants: Array.from(voiceParticipants.values()),
+          }));
           break;
         }
 
@@ -119,6 +142,12 @@ wss.on('connection', (ws) => {
             }
           });
 
+          const p = voiceParticipants.get(msg.userId);
+          if (p) {
+            if (msg.userName) p.userName = msg.userName;
+            if (msg.userAvatar) p.userAvatar = msg.userAvatar;
+          }
+
           // Broadcast to all clients to update voice participants, member lists, and active rooms immediately
           broadcast({
             type: 'user-profile-updated',
@@ -129,6 +158,10 @@ wss.on('connection', (ws) => {
             customStatus: msg.customStatus,
             bio: msg.bio,
             channelId: msg.channelId,
+          });
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
           });
           break;
         }
@@ -160,29 +193,42 @@ wss.on('connection', (ws) => {
           const client = clients.get(clientId);
           if (client) {
             client.currentChannelId = msg.channelId;
+            client.userId = msg.userId || client.userId;
+            client.userName = msg.userName || client.userName;
+            client.userAvatar = msg.userAvatar || client.userAvatar;
             client.isMuted = msg.isMuted || false;
             client.isDeafened = msg.isDeafened || false;
             client.isScreenSharing = false;
             client.isStreamingVideo = false;
           }
 
+          const newParticipant: ServerVoiceParticipant = {
+            userId: msg.userId,
+            userName: msg.userName,
+            userAvatar: msg.userAvatar,
+            channelId: msg.channelId,
+            isMuted: msg.isMuted || false,
+            isDeafened: msg.isDeafened || false,
+            isSpeaking: false,
+            isScreenSharing: false,
+            isCameraOn: false,
+            viewers: [],
+            joinedAt: Date.now(),
+          };
+
+          voiceParticipants.set(msg.userId, newParticipant);
+
           // Broadcast user joined sound & presence event
           broadcast({
             type: 'voice-user-joined',
             channelId: msg.channelId,
-            user: {
-              userId: msg.userId,
-              userName: msg.userName,
-              userAvatar: msg.userAvatar,
-              channelId: msg.channelId,
-              isMuted: msg.isMuted || false,
-              isDeafened: msg.isDeafened || false,
-              isSpeaking: false,
-              isScreenSharing: false,
-              isCameraOn: false,
-              viewers: [],
-              joinedAt: Date.now(),
-            },
+            user: newParticipant,
+          });
+
+          // Broadcast complete synchronized list to all clients so channel lists stay up to date
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
           });
           break;
         }
@@ -196,11 +242,18 @@ wss.on('connection', (ws) => {
             client.isStreamingVideo = false;
           }
 
+          voiceParticipants.delete(msg.userId);
+
           broadcast({
             type: 'voice-user-left',
             channelId: oldChannelId,
             userId: msg.userId,
             userName: msg.userName,
+          });
+
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
           });
           break;
         }
@@ -215,6 +268,15 @@ wss.on('connection', (ws) => {
             if (msg.isCameraOn !== undefined) client.isStreamingVideo = msg.isCameraOn;
           }
 
+          const p = voiceParticipants.get(msg.userId);
+          if (p) {
+            if (msg.isMuted !== undefined) p.isMuted = msg.isMuted;
+            if (msg.isDeafened !== undefined) p.isDeafened = msg.isDeafened;
+            if (msg.isSpeaking !== undefined) p.isSpeaking = msg.isSpeaking;
+            if (msg.isScreenSharing !== undefined) p.isScreenSharing = msg.isScreenSharing;
+            if (msg.isCameraOn !== undefined) p.isCameraOn = msg.isCameraOn;
+          }
+
           broadcast({
             type: 'voice-state-changed',
             channelId: msg.channelId,
@@ -227,12 +289,20 @@ wss.on('connection', (ws) => {
               isCameraOn: msg.isCameraOn,
             },
           });
+
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
+          });
           break;
         }
 
         case 'start-screen-share': {
           const client = clients.get(clientId);
           if (client) client.isScreenSharing = true;
+
+          const p = voiceParticipants.get(msg.userId);
+          if (p) p.isScreenSharing = true;
 
           broadcast({
             type: 'screen-share-started',
@@ -241,6 +311,11 @@ wss.on('connection', (ws) => {
             userName: msg.userName,
             streamTitle: msg.streamTitle || `${msg.userName}'s Screen`,
           });
+
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
+          });
           break;
         }
 
@@ -248,11 +323,19 @@ wss.on('connection', (ws) => {
           const client = clients.get(clientId);
           if (client) client.isScreenSharing = false;
 
+          const p = voiceParticipants.get(msg.userId);
+          if (p) p.isScreenSharing = false;
+
           broadcast({
             type: 'screen-share-stopped',
             channelId: msg.channelId,
             userId: msg.userId,
             userName: msg.userName,
+          });
+
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
           });
           break;
         }
@@ -321,12 +404,21 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     const client = clients.get(clientId);
-    if (client && client.currentChannelId) {
+    const participantUserId = client?.userId || clientId;
+    const p = voiceParticipants.get(participantUserId);
+    const channelId = client?.currentChannelId || p?.channelId;
+
+    if (p || channelId) {
+      voiceParticipants.delete(participantUserId);
       broadcast({
         type: 'voice-user-left',
-        channelId: client.currentChannelId,
-        userId: client.userId,
-        userName: client.userName,
+        channelId,
+        userId: participantUserId,
+        userName: client?.userName || p?.userName,
+      });
+      broadcast({
+        type: 'voice-participants-sync',
+        participants: Array.from(voiceParticipants.values()),
       });
     }
     clients.delete(clientId);

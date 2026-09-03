@@ -52,6 +52,8 @@ export interface User {
   voiceInputMode?: 'open' | 'ptt'; // 'open' (Voz Aberta / Detecção Contínua) or 'ptt' (Push to Talk / Pressione para Falar)
   pttKey?: string; // Key code or name e.g. 'Space', 'KeyV', 'ControlLeft', 'AltLeft'
   pttReleaseDelay?: number; // Release delay in ms (default 200)
+  selectedMicId?: string; // ID do microfone selecionado
+  selectedSpeakerId?: string; // ID do alto-falante/fone selecionado
 }
 
 export interface Channel {
