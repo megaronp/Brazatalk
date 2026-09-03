@@ -11,6 +11,8 @@ import {
   Pause,
   CornerDownRight,
   ShieldCheck,
+  FileText,
+  Download,
 } from 'lucide-react';
 import { EmojiReactionPicker } from './EmojiReactionPicker';
 
@@ -171,11 +173,46 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
         {/* Attachments preview */}
         {message.attachments && message.attachments.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap gap-2.5">
             {message.attachments.map((att) => (
-              <div key={att.id} className="rounded-xl overflow-hidden border border-white/[0.08] max-w-md shadow-lg">
-                {att.type === 'image' && (
-                  <img src={att.url} alt={att.name} className="max-h-64 object-cover rounded-xl" />
+              <div key={att.id} className="rounded-xl overflow-hidden border border-white/[0.08] max-w-md shadow-lg bg-[#121520]">
+                {att.type === 'image' ? (
+                  <div className="group relative">
+                    <img
+                      src={att.url}
+                      alt={att.name}
+                      className="max-h-72 w-auto object-cover rounded-xl transition-transform hover:scale-[1.01]"
+                      loading="lazy"
+                    />
+                    <a
+                      href={att.url}
+                      download={att.name}
+                      title="Baixar imagem"
+                      className="absolute bottom-2 right-2 p-1.5 rounded-lg bg-black/60 backdrop-blur-sm text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/80"
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3 p-3 min-w-[220px]">
+                    <div className="w-10 h-10 rounded-lg bg-indigo-600/20 text-indigo-400 flex items-center justify-center shrink-0">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-xs text-white truncate">{att.name}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">
+                        {att.size ? `${(att.size / 1024).toFixed(1)} KB` : 'Arquivo'}
+                      </p>
+                    </div>
+                    <a
+                      href={att.url}
+                      download={att.name}
+                      title="Baixar arquivo"
+                      className="p-2 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white transition-colors cursor-pointer shrink-0"
+                    >
+                      <Download className="w-4 h-4" />
+                    </a>
+                  </div>
                 )}
               </div>
             ))}

@@ -71,6 +71,7 @@ export default function App() {
   const [pendingSyncCount, setPendingSyncCount] = useState<number>(0);
 
   // In-App & Native Desktop Notifications
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const pushNotificationToast = (
     title: string,
     body: string,
@@ -277,6 +278,7 @@ export default function App() {
           avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150',
           status: 'online',
           customStatus: 'Desenvolvendo Braza Talk WebRTC',
+          joinedAt: Date.now() - 86400000 * 30,
         },
         {
           id: 'user-lucas',
@@ -284,6 +286,7 @@ export default function App() {
           avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
           status: 'online',
           customStatus: 'Testando áudio HD SFU',
+          joinedAt: Date.now() - 86400000 * 15,
         },
         {
           id: 'user-sofia',
@@ -291,6 +294,7 @@ export default function App() {
           avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=150',
           status: 'idle',
           customStatus: 'Em reunião no canal de voz',
+          joinedAt: Date.now() - 86400000 * 7,
         },
       ];
     }
