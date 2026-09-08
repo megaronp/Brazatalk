@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChannelType } from '../../types';
-import { Hash, Volume2, Megaphone, Radio, ShieldCheck } from 'lucide-react';
+import { Hash, Volume2, Megaphone, Radio, ShieldCheck, Sparkles } from 'lucide-react';
 
 interface CreateServerOrChannelModalProps {
   mode: 'server' | 'channel';
@@ -140,6 +140,12 @@ export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProp
                       icon: <Radio className="w-5 h-5 text-pink-400" />,
                       title: 'Palco (Stage)',
                       desc: 'Eventos ao vivo onde palestrantes falam e ouvintes escutam.',
+                    },
+                    {
+                      type: 'project',
+                      icon: <Sparkles className="w-5 h-5 text-indigo-400" />,
+                      title: 'Sala de Projeto IA',
+                      desc: 'Workspace colaborativo com agentes, RAG, editor de arquivos, sandbox de testes e voz.',
                     },
                   ].map((item) => (
                     <button

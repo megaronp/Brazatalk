@@ -1,6 +1,6 @@
 {
   "name": "Braza Talk - Voz, Chat & Comunidade em Tempo Real",
-  "description": "Plataforma completa de comunicação em tempo real com salas de voz/vídeo HD, compartilhamento de tela, criptografia ponta a ponta (E2EE), sistema de cargos granulares, bots inteligentes com IA, sons customizados e suporte offline/PWA.",
+  "description": "Plataforma completa de comunicação em tempo real com salas de voz/vídeo HD, salas de projeto com IA, agentes especializados, RAG, editor de arquivos, sandbox de testes, suporte multi-LLM, compartilhamento de tela e criptografia E2EE.",
   "requestFramePermissions": [
     "camera",
     "microphone",

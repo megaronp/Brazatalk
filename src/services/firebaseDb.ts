@@ -66,6 +66,26 @@ export const firebaseDb = {
         return isOwner || isMember || isPublicCommunity;
       });
 
+      // Ensure servers have the AI Project Room channel
+      userServers.forEach((srv) => {
+        if (!srv.channels.some((c) => c.type === 'project')) {
+          const catProjId = `cat-project-${srv.id}`;
+          if (!srv.categories.some((cat) => cat.name.includes('PROJETO'))) {
+            srv.categories.push({ id: catProjId, serverId: srv.id, name: 'SALAS DE PROJETO IA' });
+          }
+          srv.channels.push({
+            id: `chan-lab-mods-${srv.id}`,
+            serverId: srv.id,
+            categoryId: catProjId,
+            name: 'lab-mods-ia',
+            type: 'project' as ChannelType,
+            topic: 'Sala de Projeto IA: Workspace de Mods, Agentes, RAG, Arquivos e Sandbox de Testes',
+            isE2EE: false,
+            isPrivate: false,
+          });
+        }
+      });
+
       callback(userServers);
       offlineStorage.cacheServers(userServers).catch(() => {});
     }, (err) => {
@@ -317,6 +337,7 @@ export const firebaseDb = {
       categories: [
         { id: `cat-text-${initialServerId}`, serverId: initialServerId, name: 'CANAIS DE TEXTO' },
         { id: `cat-voice-${initialServerId}`, serverId: initialServerId, name: 'SALAS DE VOZ & VÍDEO' },
+        { id: `cat-project-${initialServerId}`, serverId: initialServerId, name: 'SALAS DE PROJETO IA' },
       ],
       channels: [
         {
@@ -336,6 +357,16 @@ export const firebaseDb = {
           name: 'anúncios',
           type: 'announcement' as ChannelType,
           topic: 'Atualizações e comunicados da plataforma',
+          isE2EE: false,
+          isPrivate: false,
+        },
+        {
+          id: 'chan-lab-mods',
+          serverId: initialServerId,
+          categoryId: `cat-project-${initialServerId}`,
+          name: 'lab-mods-ia',
+          type: 'project' as ChannelType,
+          topic: 'Sala de Projeto IA: Workspace de Mods, Agentes, RAG, Arquivos e Sandbox de Testes',
           isE2EE: false,
           isPrivate: false,
         },

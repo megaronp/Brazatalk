@@ -19,6 +19,7 @@ import {
   Sliders,
   VolumeX,
   Video,
+  Sparkles,
 } from 'lucide-react';
 
 interface ChannelNavProps {
@@ -77,6 +78,8 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
         return <Megaphone className="w-4 h-4 text-slate-400 group-hover:text-slate-200 shrink-0" />;
       case 'stage':
         return <Radio className="w-4 h-4 text-pink-400 shrink-0" />;
+      case 'project':
+        return <Sparkles className="w-4 h-4 text-indigo-400 group-hover:text-indigo-300 shrink-0" />;
       default:
         return <Hash className="w-4 h-4 text-slate-400 group-hover:text-slate-200 shrink-0" />;
     }
@@ -298,6 +301,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                   {channelsInCategory.map((channel) => {
                     const isActive = activeChannelId === channel.id;
                     const isVoice = channel.type === 'voice' || channel.type === 'stage';
+                    const hasVoiceParticipants = isVoice || channel.type === 'project';
                     const participantsInChannel = voiceParticipants.filter((p) => p.channelId === channel.id);
 
                     return (
@@ -346,8 +350,8 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                           )}
                         </div>
 
-                        {/* Connected Voice Participants List under voice channels */}
-                        {isVoice && participantsInChannel.length > 0 && (
+                        {/* Connected Voice Participants List under voice/project channels */}
+                        {hasVoiceParticipants && participantsInChannel.length > 0 && (
                           <div className="pl-6 pr-2 py-1 space-y-1">
                             {participantsInChannel.map((participant) => (
                               <div

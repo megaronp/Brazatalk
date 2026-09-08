@@ -1,4 +1,4 @@
-export type ChannelType = 'text' | 'voice' | 'announcement' | 'stage';
+export type ChannelType = 'text' | 'voice' | 'announcement' | 'stage' | 'project';
 
 export type UserStatus = 'online' | 'idle' | 'dnd' | 'offline';
 
@@ -208,3 +208,119 @@ export interface NotificationItem {
   timestamp: number;
   read: boolean;
 }
+
+export type ProjectLLMProvider = 'gemini' | 'openai' | 'claude' | 'groq' | 'deepseek' | 'custom';
+
+export interface ProjectAgent {
+  id: string;
+  name: string;
+  handle: string; // e.g. "@scriptmaster"
+  avatar: string;
+  role: string;
+  color: string;
+  skills: string[];
+  systemPrompt: string;
+  provider?: ProjectLLMProvider;
+  model?: string;
+}
+
+export interface ProjectRagDoc {
+  id: string;
+  title: string;
+  gameEngine?: string;
+  tags: string[];
+  content: string;
+  uploadedAt: number;
+}
+
+export interface ProjectFile {
+  id: string;
+  name: string; // e.g. "fxmanifest.lua", "client.lua", "config.json", "index.html"
+  path: string;
+  content: string;
+  language: 'lua' | 'json' | 'javascript' | 'typescript' | 'html' | 'css' | 'csharp' | 'python' | 'markdown' | 'yaml' | 'text';
+  updatedAt: number;
+  updatedBy: string; // user or agent name
+  version: number;
+}
+
+export interface ProjectPlanStep {
+  id: string;
+  order: number;
+  title: string;
+  description: string;
+  assignedAgentHandle: string; // e.g. "@scriptmaster"
+  status: 'pending' | 'in_progress' | 'waiting_user_input' | 'completed' | 'failed';
+  questionToUser?: string; // if agent paused to ask user
+  userAnswer?: string;
+  outputSummary?: string;
+  filesTouched?: string[];
+  updatedAt?: number;
+}
+
+export interface ProjectActionPlan {
+  id: string;
+  goal: string;
+  status: 'idle' | 'running' | 'waiting_user' | 'completed' | 'paused';
+  currentStepIndex: number;
+  steps: ProjectPlanStep[];
+  startedAt?: number;
+  updatedAt?: number;
+}
+
+export interface InterAgentMessage {
+  id: string;
+  senderHandle: string;
+  senderName: string;
+  senderAvatar: string;
+  senderColor: string;
+  recipientHandle?: string; // e.g. "@auditor" or "all"
+  actionType: 'thought' | 'proposal' | 'critique' | 'code_review' | 'question_user' | 'approval';
+  content: string;
+  timestamp: number;
+  relatedStepId?: string;
+  relatedFileName?: string;
+}
+
+export interface ProjectAgentActivity {
+  agentHandle: string;
+  status: 'idle' | 'thinking' | 'coding' | 'reviewing' | 'waiting_user';
+  currentTask?: string;
+  thought?: string;
+  lastActiveAt: number;
+}
+
+export interface ProjectPendingQuestion {
+  stepId: string;
+  agentHandle: string;
+  agentName: string;
+  agentAvatar: string;
+  agentColor?: string;
+  question: string;
+  suggestedOptions?: string[];
+  timestamp: number;
+}
+
+export interface ProjectRoomState {
+  channelId: string;
+  serverId?: string;
+  projectName: string;
+  gameEngine: string; // e.g. "GTA FiveM / Lua", "Minecraft / Fabric", "Unity / C#", "Unreal Engine / C++", "Skyrim / Papyrus", "Web / React"
+  targetDescription: string;
+  guardrails: string;
+  selectedProvider: ProjectLLMProvider;
+  selectedModel: string;
+  customApiKey?: string;
+  customBaseUrl?: string;
+  agents: ProjectAgent[];
+  ragDocs: ProjectRagDoc[];
+  files: ProjectFile[];
+  activeFileId?: string;
+  testConsoleLogs?: string[];
+  actionPlan?: ProjectActionPlan;
+  agenticActivities?: Record<string, ProjectAgentActivity>;
+  interAgentDialogues?: InterAgentMessage[];
+  pendingUserQuestion?: ProjectPendingQuestion | null;
+  updatedAt?: number;
+}
+

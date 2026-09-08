@@ -34,6 +34,7 @@ import { screenShareService } from './services/screenShareService';
 import { webrtcService } from './services/webrtcService';
 import { useVoiceCall } from './hooks/useVoiceCall';
 import { Sparkles } from 'lucide-react';
+import { ProjectWorkspace } from './components/ProjectRoom/ProjectWorkspace';
 import { 
   auth, 
   onAuthStateChanged, 
@@ -607,6 +608,11 @@ export default function App() {
             'mention'
           );
         }
+        break;
+      }
+
+      case 'project-plan-updated': {
+        window.dispatchEvent(new CustomEvent('braza-project-plan-updated', { detail: data }));
         break;
       }
 
@@ -1427,7 +1433,21 @@ export default function App() {
 
         {/* 3. Center Main Stage / Chat View */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
-          {isVoiceActiveChannel ? (
+          {currentChannel.type === 'project' ? (
+            <ProjectWorkspace
+              channel={currentChannel}
+              currentUser={currentUser}
+              voiceParticipants={enrichedSidebarVoiceParticipants}
+              currentVoiceChannelId={currentVoiceChannelId}
+              onJoinVoice={handleJoinVoice}
+              onLeaveVoice={handleLeaveVoiceAndNavigateToGeneral}
+              isMuted={isMuted}
+              isDeafened={isDeafened}
+              onToggleMute={handleToggleMute}
+              onToggleDeafen={handleToggleDeafen}
+              onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
+            />
+          ) : isVoiceActiveChannel ? (
             <VoiceRoomStage
               channel={currentChannel}
               participants={activeStageVoiceParticipants}
@@ -1464,8 +1484,8 @@ export default function App() {
             />
           )}
 
-          {/* Active Voice Connection Bar at bottom when connected in voice */}
-          {currentVoiceChannelId && (
+          {/* Active Voice Connection Bar at bottom when connected in voice (hidden if already in project room which has integrated bar) */}
+          {currentVoiceChannelId && currentChannel.type !== 'project' && (
             <VoiceControlsBar
               currentChannel={
                 currentServer?.channels.find((c) => c.id === currentVoiceChannelId) || currentChannel
