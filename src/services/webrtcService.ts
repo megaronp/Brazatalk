@@ -5,13 +5,35 @@
  * Analyzes audio levels for both local and remote streams in real-time to highlight active speakers.
  */
 
-const ICE_SERVERS: RTCConfiguration = {
-  iceServers: [
+const getIceServers = (): RTCConfiguration => {
+  const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
-  ],
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ];
+
+  // Optional Coturn TURN relay server support (configurable for VPS/production NAT traversal)
+  const turnUrl = (import.meta as any).env?.VITE_TURN_URL;
+  const turnUser = (import.meta as any).env?.VITE_TURN_USERNAME;
+  const turnCredential = (import.meta as any).env?.VITE_TURN_CREDENTIAL;
+
+  if (turnUrl) {
+    servers.push({
+      urls: turnUrl,
+      username: turnUser || undefined,
+      credential: turnCredential || undefined,
+    });
+  }
+
+  return {
+    iceServers: servers,
+    iceCandidatePoolSize: 10,
+  };
 };
+
+const ICE_SERVERS: RTCConfiguration = getIceServers();
 
 export type RemoteStreamCallback = (peerId: string, stream: MediaStream | null) => void;
 export type SpeakingCallback = (userId: string, isSpeaking: boolean) => void;

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Server, Channel, VoiceParticipant, User } from '../../types';
+import { Server, Channel, VoiceParticipant, User, Permission } from '../../types';
+import { hasPermission } from '../../utils/permissions';
 import {
   Hash,
   Volume2,
@@ -62,6 +63,10 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
 }) => {
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({});
   const [showServerMenu, setShowServerMenu] = useState(false);
+
+  const canManageChannels = hasPermission(currentUser, server, Permission.MANAGE_CHANNELS);
+  const canManageServer = hasPermission(currentUser, server, Permission.MANAGE_SERVER);
+  const canInvite = hasPermission(currentUser, server, Permission.CREATE_INVITE);
 
   const toggleCategory = (catId: string) => {
     setCollapsedCategories((prev) => ({ ...prev, [catId]: !prev[catId] }));
@@ -218,39 +223,45 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
             id="popover-server-menu"
             className="absolute top-13 left-2 right-2 bg-[#12151f]/95 backdrop-blur-xl border border-white/10 rounded-xl p-1.5 shadow-2xl z-50 flex flex-col gap-1 text-xs"
           >
-            <button
-              id="btn-menu-server-settings"
-              onClick={() => {
-                setShowServerMenu(false);
-                onOpenServerSettings();
-              }}
-              className="flex items-center justify-between px-2.5 py-2 rounded-lg text-slate-300 hover:bg-indigo-600 hover:text-white transition-colors"
-            >
-              <span>Configurações do Servidor</span>
-              <Settings className="w-3.5 h-3.5" />
-            </button>
-            <button
-              id="btn-menu-create-channel"
-              onClick={() => {
-                setShowServerMenu(false);
-                onOpenCreateChannel();
-              }}
-              className="flex items-center justify-between px-2.5 py-2 rounded-lg text-slate-300 hover:bg-indigo-600 hover:text-white transition-colors"
-            >
-              <span>Criar Canal</span>
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-            <button
-              id="btn-menu-invite-members"
-              onClick={() => {
-                setShowServerMenu(false);
-                if (onOpenInvite) onOpenInvite();
-              }}
-              className="flex items-center justify-between px-2.5 py-2 rounded-lg text-indigo-400 hover:bg-indigo-600 hover:text-white transition-colors font-medium cursor-pointer"
-            >
-              <span>Convidar Pessoas</span>
-              <UserPlus className="w-3.5 h-3.5" />
-            </button>
+            {canManageServer && (
+              <button
+                id="btn-menu-server-settings"
+                onClick={() => {
+                  setShowServerMenu(false);
+                  onOpenServerSettings();
+                }}
+                className="flex items-center justify-between px-2.5 py-2 rounded-lg text-slate-300 hover:bg-indigo-600 hover:text-white transition-colors"
+              >
+                <span>Configurações do Servidor</span>
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canManageChannels && (
+              <button
+                id="btn-menu-create-channel"
+                onClick={() => {
+                  setShowServerMenu(false);
+                  onOpenCreateChannel();
+                }}
+                className="flex items-center justify-between px-2.5 py-2 rounded-lg text-slate-300 hover:bg-indigo-600 hover:text-white transition-colors"
+              >
+                <span>Criar Canal</span>
+                <Plus className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {canInvite && (
+              <button
+                id="btn-menu-invite-members"
+                onClick={() => {
+                  setShowServerMenu(false);
+                  if (onOpenInvite) onOpenInvite();
+                }}
+                className="flex items-center justify-between px-2.5 py-2 rounded-lg text-indigo-400 hover:bg-indigo-600 hover:text-white transition-colors font-medium cursor-pointer"
+              >
+                <span>Convidar Pessoas</span>
+                <UserPlus className="w-3.5 h-3.5" />
+              </button>
+            )}
             <div className="h-[1px] bg-white/[0.06] my-0.5" />
             <button
               id="btn-menu-sound-effects"
@@ -285,14 +296,16 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                   {isCollapsed ? <ChevronRight className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
                   <span className="truncate">{category.name}</span>
                 </button>
-                <button
-                  id={`btn-add-channel-cat-${category.id}`}
-                  onClick={() => onOpenCreateChannel(category.id)}
-                  title="Criar Canal nesta categoria"
-                  className="opacity-0 group-hover:opacity-100 hover:text-white transition-opacity p-0.5 rounded hover:bg-white/[0.08]"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+                {canManageChannels && (
+                  <button
+                    id={`btn-add-channel-cat-${category.id}`}
+                    onClick={() => onOpenCreateChannel(category.id)}
+                    title="Criar Canal nesta categoria"
+                    className="opacity-0 group-hover:opacity-100 hover:text-white transition-opacity p-0.5 rounded hover:bg-white/[0.08]"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
 
               {/* Channels List */}

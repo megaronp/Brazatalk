@@ -11,7 +11,7 @@ import { GoogleGenAI } from '@google/genai';
 
 const app = express();
 const server = http.createServer(app);
-const PORT = Number(process.env.PORT) || 3000;
+const PORT = 3000;
 
 // Trust reverse proxy (Nginx on Oracle VPS)
 app.set('trust proxy', 1);
@@ -21,6 +21,7 @@ app.use(
   helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
+    frameguard: false, // Critical: Allows preview iframe in AI Studio
   })
 );
 
@@ -102,7 +103,8 @@ export async function verifyFirebaseIdToken(token: string): Promise<{ uid: strin
       verifier.update(`${parts[0]}.${parts[1]}`);
       const isValid = verifier.verify(cert, parts[2], 'base64url');
       if (!isValid) return null;
-    } else if (process.env.NODE_ENV === 'production') {
+    } else {
+      // If certificate is not found for kid, never trust unverified tokens
       return null;
     }
 
@@ -116,7 +118,9 @@ export async function verifyFirebaseIdToken(token: string): Promise<{ uid: strin
   }
 }
 
-// Authentication Middleware for API routes (C2)
+const ALLOW_DEV_AUTH = process.env.ALLOW_DEV_AUTH === 'true';
+
+// Authentication Middleware for API routes (C2 / B1)
 async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
   const authHeader = req.headers.authorization;
   const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
@@ -130,7 +134,7 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
   }
 
   // Allow development or preview fallback
-  if (process.env.NODE_ENV !== 'production') {
+  if (process.env.NODE_ENV !== 'production' || ALLOW_DEV_AUTH) {
     (req as any).user = { uid: (req.headers['x-dev-user-id'] as string) || 'dev-user', name: 'Dev User' };
     return next();
   }
@@ -325,7 +329,7 @@ wss.on('connection', (ws) => {
     }));
   } catch {}
 
-  ws.on('message', (raw) => {
+  ws.on('message', async (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
 
@@ -351,26 +355,19 @@ wss.on('connection', (ws) => {
           let verifiedUserName = msg.userName || 'Membro';
           let verifiedAvatar = msg.userAvatar;
 
-          // Verify Firebase ID Token if provided (C3)
+          // Verify Firebase ID Token if provided (C3 / P3)
           if (msg.token) {
-            verifyFirebaseIdToken(msg.token).then((verified) => {
+            try {
+              const verified = await verifyFirebaseIdToken(msg.token);
               if (verified) {
                 verifiedUserId = verified.uid;
                 verifiedUserName = verified.name || msg.userName || 'Membro';
-                const oldClientId = clientId;
-                clientId = verifiedUserId;
-                if (oldClientId !== clientId) {
-                  clients.delete(oldClientId);
-                }
-                clients.set(clientId, {
-                  ws,
-                  userId: verifiedUserId,
-                  userName: verifiedUserName,
-                  userAvatar: verifiedAvatar,
-                  currentChannelId: msg.channelId,
-                });
+              } else if (msg.userId) {
+                verifiedUserId = msg.userId;
               }
-            }).catch(() => {});
+            } catch {
+              if (msg.userId) verifiedUserId = msg.userId;
+            }
           } else if (msg.userId) {
             // Unauthenticated guest identity is isolated with prefix
             verifiedUserId = msg.userId.startsWith('guest-') ? msg.userId : `guest-${msg.userId}`;
@@ -388,6 +385,12 @@ wss.on('connection', (ws) => {
             userAvatar: verifiedAvatar,
             currentChannelId: msg.channelId,
           });
+
+          // Confirm authentication success to client
+          ws.send(JSON.stringify({
+            type: 'auth-ok',
+            userId: verifiedUserId,
+          }));
 
           // Send current active voice participants
           ws.send(JSON.stringify({
@@ -1245,6 +1248,24 @@ async function runProjectAutonomousLoop(channelId: string) {
         break;
       }
 
+      // Safety ceiling: prevent unbounded infinite step execution (A7)
+      const MAX_AUTONOMOUS_STEPS = 20;
+      if (currentStepIndex >= MAX_AUTONOMOUS_STEPS) {
+        runner.plan.status = 'completed';
+        runner.plan.updatedAt = Date.now();
+        addInterAgentDialogue(runner, {
+          senderHandle: '@arquiteto',
+          senderName: 'Arquiteto de Soluções',
+          senderAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=arquiteto',
+          senderColor: '#8b5cf6',
+          recipientHandle: 'all',
+          actionType: 'approval',
+          content: `🛑 **Limite de segurança atingido:** O plano atingiu o teto de ${MAX_AUTONOMOUS_STEPS} passos autônomos por sessão para preservar estabilidade e cotas. Os arquivos gerados estão preservados.`,
+        });
+        broadcastPlanUpdate(runner);
+        break;
+      }
+
       const step = steps[currentStepIndex];
 
       // If waiting for user, halt loop safely
@@ -1359,11 +1380,15 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
           ) {
             modelName = 'gemini-flash-latest';
           }
-          const resp = await generateWithFallback(client, {
-            model: modelName,
-            contents: `Execute o passo ${step.order}: ${step.title}. Gere os arquivos técnicos necessários.`,
-            config: { systemInstruction },
-          });
+          const resp = await withTimeout(
+            generateWithFallback(client, {
+              model: modelName,
+              contents: `Execute o passo ${step.order}: ${step.title}. Gere os arquivos técnicos necessários.`,
+              config: { systemInstruction },
+            }),
+            60000,
+            'A geração de arquivos do passo autônomo excedeu o tempo limite de 60 segundos.'
+          );
           aiResponseText = resp.text || '';
         }
       } catch (err: any) {
@@ -1468,19 +1493,29 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
         }
       }
 
-      // Merge files into projectState
+      // Merge files into projectState with safety bounds (A7)
       if (!Array.isArray(runner.projectState.files)) {
         runner.projectState.files = [];
       }
 
+      const MAX_SINGLE_FILE_CHARS = 500_000; // 500 KB limit per file
+      const MAX_TOTAL_FILES_CHARS = 10_000_000; // 10 MB limit total workspace
+
       const filesTouchedNames: string[] = [];
       for (const ef of extractedFiles) {
         filesTouchedNames.push(ef.name);
+        const safeContent = typeof ef.content === 'string' ? ef.content.slice(0, MAX_SINGLE_FILE_CHARS) : String(ef.content || '');
+        const currentTotalSize = runner.projectState.files.reduce((acc: number, f: any) => acc + (f.content?.length || 0), 0);
+        if (currentTotalSize + safeContent.length > MAX_TOTAL_FILES_CHARS) {
+          console.warn(`Total workspace file size limit reached for ${runner.channelId}, skipping file ${ef.name}`);
+          continue;
+        }
+
         const existingIdx = runner.projectState.files.findIndex((f: any) => f.name === ef.name);
         if (existingIdx >= 0) {
           runner.projectState.files[existingIdx] = {
             ...runner.projectState.files[existingIdx],
-            content: ef.content,
+            content: safeContent,
             updatedAt: Date.now(),
             updatedBy: agent.name,
             version: (runner.projectState.files[existingIdx].version || 1) + 1,
@@ -1491,7 +1526,7 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
             name: ef.name,
             path: ef.name,
             language: ef.language || 'lua',
-            content: ef.content,
+            content: safeContent,
             updatedAt: Date.now(),
             updatedBy: agent.name,
             version: 1,

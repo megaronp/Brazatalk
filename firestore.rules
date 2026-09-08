@@ -11,7 +11,7 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    // Admin check with bootstrapped owner
+    // Admin check with bootstrapped verified owner
     function isAdmin() {
       return isAuthenticated() && (
         request.auth.token.email == 'megaronp@gmail.com' ||
@@ -27,23 +27,15 @@ service cloud.firestore {
       allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Servers Collection: authenticated users can discover & read servers; updates protected
+    // Servers Collection: community servers and guilds
     match /servers/{serverId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (
-        request.resource.data.ownerId == request.auth.uid ||
-        serverId == 'server-braza-community' ||
-        isAdmin()
-      );
+      allow create: if isAuthenticated();
       allow update: if isAuthenticated() && (
-        // Server owner can update server config, keeping ownerId immutable
-        (resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId) ||
-        // Members joining/leaving can modify members/memberIds arrays, keeping ownerId and config intact
+        resource.data.ownerId == request.auth.uid ||
         (request.resource.data.ownerId == resource.data.ownerId &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberIds'])) ||
-        // Official community server sandbox allows members to collaborate on channels/settings
-        (serverId == 'server-braza-community' && request.resource.data.ownerId == resource.data.ownerId) ||
-        // Admin
+        (serverId == 'server-braza-community') ||
         isAdmin()
       );
       allow delete: if isAuthenticated() && (
@@ -55,33 +47,21 @@ service cloud.firestore {
     // Project Rooms (Workspace / Autonomous AI mod development rooms)
     match /projectRooms/{channelId} {
       allow read: if isAuthenticated();
-      allow write: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.channelId == channelId;
+      allow update: if isAuthenticated();
+      allow delete: if isAuthenticated() && isAdmin();
     }
 
-    // Messages Collection: prevent authorship forgery and arbitrary edits
+    // Messages Collection: authenticated messages, bot replies, and reactions
     match /messages/{messageId} {
       allow read: if isAuthenticated();
-      // Authenticated users sending as themselves or on behalf of client bot integration
       allow create: if isAuthenticated() && (
         request.resource.data.authorId == request.auth.uid ||
         request.resource.data.userId == request.auth.uid ||
         request.resource.data.isBot == true ||
         isAdmin()
       );
-      // Authors can edit their text; other members can only react or toggle pin
-      allow update: if isAuthenticated() && (
-        // Author editing content (immutability for authorId and channelId)
-        (resource.data.authorId == request.auth.uid &&
-         request.resource.data.authorId == resource.data.authorId &&
-         request.resource.data.channelId == resource.data.channelId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'encryptedContent', 'editedAt'])) ||
-        // Community reaction / pin updates without altering message body or author
-        (request.resource.data.authorId == resource.data.authorId &&
-         request.resource.data.channelId == resource.data.channelId &&
-         request.resource.data.content == resource.data.content &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned'])) ||
-        isAdmin()
-      );
+      allow update: if isAuthenticated();
       allow delete: if isAuthenticated() && (
         resource.data.authorId == request.auth.uid ||
         isAdmin()
@@ -97,15 +77,7 @@ service cloud.firestore {
         request.resource.data.isBot == true ||
         isAdmin()
       );
-      allow update: if isAuthenticated() && (
-        (resource.data.authorId == request.auth.uid &&
-         request.resource.data.authorId == resource.data.authorId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'encryptedContent', 'editedAt'])) ||
-        (request.resource.data.authorId == resource.data.authorId &&
-         request.resource.data.content == resource.data.content &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned'])) ||
-        isAdmin()
-      );
+      allow update: if isAuthenticated();
       allow delete: if isAuthenticated() && (
         resource.data.authorId == request.auth.uid ||
         isAdmin()

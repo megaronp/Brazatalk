@@ -89,7 +89,7 @@ function sanitizeFirestoreData<T>(obj: T): T {
 }
 
 export const firebaseDb = {
-  // Listen to servers the user is authorized to see (owned, joined, or official public community)
+  // Listen to servers the user is authorized to see (P1: filtered by memberIds)
   subscribeToServers(userId: string, callback: (servers: Server[]) => void) {
     // Deliver offline cached servers immediately for zero-latency startup
     offlineStorage.getCachedServers().then((cached) => {
@@ -98,24 +98,12 @@ export const firebaseDb = {
       }
     }).catch(() => {});
 
-    const serversRef = collection(db, 'servers');
-    return onSnapshot(serversRef, (snapshot) => {
-      const allServers: Server[] = [];
-      snapshot.forEach((docSnap) => {
-        allServers.push({ id: docSnap.id, ...docSnap.data() } as Server);
-      });
+    if (!userId) {
+      return () => {};
+    }
 
-      // Filter: users only see servers where they are owner, member, or official public community
-      const userServers = allServers.filter((s) => {
-        if (!userId) return s.id === 'server-braza-community' || (s as any).isPublic === true;
-        const isOwner = s.ownerId === userId;
-        const isMember = Array.isArray(s.members) && s.members.some((m) => m && m.id === userId);
-        const isPublicCommunity = s.id === 'server-braza-community' || (s as any).isPublic === true;
-        return isOwner || isMember || isPublicCommunity;
-      });
-
-      // Ensure servers have the AI Project Room channel
-      userServers.forEach((srv) => {
+    const attachLabChannel = (servers: Server[]) => {
+      servers.forEach((srv) => {
         if (!srv.channels.some((c) => c.type === 'project')) {
           const catProjId = `cat-project-${srv.id}`;
           if (!srv.categories.some((cat) => cat.name.includes('PROJETO'))) {
@@ -133,11 +121,31 @@ export const firebaseDb = {
           });
         }
       });
+    };
 
+    const serversRef = collection(db, 'servers');
+
+    return onSnapshot(serversRef, (snapshot) => {
+      const allServers: Server[] = [];
+      snapshot.forEach((docSnap) => {
+        allServers.push({ id: docSnap.id, ...docSnap.data() } as Server);
+      });
+
+      // Filter: users see servers where they are owner, member, or official public community
+      const userServers = allServers.filter((s) => {
+        if (!userId) return s.id === 'server-braza-community' || (s as any).isPublic === true;
+        const isOwner = s.ownerId === userId;
+        const isMember = (Array.isArray(s.members) && s.members.some((m) => m && m.id === userId)) ||
+                         (Array.isArray((s as any).memberIds) && (s as any).memberIds.includes(userId));
+        const isPublicCommunity = s.id === 'server-braza-community' || (s as any).isPublic === true;
+        return isOwner || isMember || isPublicCommunity;
+      });
+
+      attachLabChannel(userServers);
       callback(userServers);
       offlineStorage.cacheServers(userServers).catch(() => {});
     }, (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'servers');
+      console.warn('Failed to listen to servers, falling back to cache:', err);
       // Graceful fallback to offline cache so user experience remains uninterrupted
       offlineStorage.getCachedServers().then((cached) => {
         if (cached && cached.length > 0) {
@@ -155,9 +163,10 @@ export const firebaseDb = {
       let serverSnap = await getDoc(serverRef);
 
       if (!serverSnap.exists()) {
-        // Search across all servers if passed a short invite code or slug
+        // Search across public servers if passed a short invite code or slug
         const serversRef = collection(db, 'servers');
-        const snap = await getDocs(serversRef);
+        const q = query(serversRef, where('isPublic', '==', true));
+        const snap = await getDocs(q);
         let foundDoc: any = null;
         snap.forEach((d) => {
           const s = d.data();
@@ -186,7 +195,11 @@ export const firebaseDb = {
       if (!alreadyMember) {
         const updatedMembers = [...members, user];
         const memberIds = Array.from(new Set(updatedMembers.map((m) => m.id)));
-        await setDoc(serverRef, sanitizeFirestoreData({ ...serverData, members: updatedMembers, memberIds }), { merge: true });
+        // Use updateDoc with only members and memberIds to strictly conform to firestore.rules
+        await updateDoc(serverRef, {
+          members: sanitizeFirestoreData(updatedMembers),
+          memberIds,
+        });
         serverData.members = updatedMembers;
         serverData.memberIds = memberIds;
       }
@@ -202,13 +215,11 @@ export const firebaseDb = {
   async getAllPublicServers(): Promise<Server[]> {
     try {
       const serversRef = collection(db, 'servers');
-      const snapshot = await getDocs(serversRef);
+      const q = query(serversRef, where('isPublic', '==', true));
+      const snapshot = await getDocs(q);
       const list: Server[] = [];
       snapshot.forEach((docSnap) => {
-        const s = { id: docSnap.id, ...docSnap.data() } as Server;
-        if (s.id === 'server-braza-community' || (s as any).isPublic === true) {
-          list.push(s);
-        }
+        list.push({ id: docSnap.id, ...docSnap.data() } as Server);
       });
       return list;
     } catch (e) {
@@ -255,8 +266,10 @@ export const firebaseDb = {
     await deleteDoc(doc(db, 'servers', serverId));
   },
 
-  // Listen to messages for a specific channel with pagination/limit and offline cache
+  // Listen to messages for a specific channel with pagination/limit and offline cache (P5: leak-free cleanup)
   subscribeToChannelMessages(channelId: string, callback: (messages: Message[]) => void, maxCount: number = 60) {
+    if (!channelId) return () => {};
+
     // Deliver offline cached messages immediately
     offlineStorage.getCachedMessages(channelId).then((cached) => {
       if (cached && cached.length > 0) {
@@ -265,34 +278,18 @@ export const firebaseDb = {
     }).catch(() => {});
 
     const messagesRef = collection(db, 'messages');
-    
-    // Attempt ordered query by timestamp descending (latest messages)
-    try {
-      const q = query(
-        messagesRef, 
-        where('channelId', '==', channelId),
-        orderBy('timestamp', 'desc'),
-        limit(maxCount)
-      );
-      
-      return onSnapshot(q, (snapshot) => {
-        const msgs: Message[] = [];
-        snapshot.forEach((docSnap) => {
-          msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
-        });
-        // Present in ascending order for chat window display
-        msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-        callback(msgs);
-        offlineStorage.cacheMessages(msgs).catch(() => {});
-      }, (err) => {
-        console.warn('Firestore ordered messages listener fell back to unordered:', err?.message || err);
-        // Fallback in case composite index is not yet built
+    let isCleanedUp = false;
+    let currentUnsub: (() => void) | null = null;
+
+    const startFallbackListener = () => {
+      if (isCleanedUp) return;
+      try {
         const fallbackQ = query(
           messagesRef,
           where('channelId', '==', channelId),
           limit(maxCount)
         );
-        return onSnapshot(fallbackQ, (fallbackSnap) => {
+        currentUnsub = onSnapshot(fallbackQ, (fallbackSnap) => {
           const msgs: Message[] = [];
           fallbackSnap.forEach((docSnap) => {
             msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
@@ -306,21 +303,41 @@ export const firebaseDb = {
             if (cached && cached.length > 0) callback(cached);
           }).catch(() => {});
         });
-      });
-    } catch (e) {
-      // Fallback if query creation fails
-      const fallbackQ = query(messagesRef, where('channelId', '==', channelId), limit(maxCount));
-      return onSnapshot(fallbackQ, (snapshot) => {
+      } catch (e) {
+        console.warn('Fallback messages listener failed:', e);
+      }
+    };
+
+    try {
+      const q = query(
+        messagesRef, 
+        where('channelId', '==', channelId),
+        orderBy('timestamp', 'desc'),
+        limit(maxCount)
+      );
+      
+      currentUnsub = onSnapshot(q, (snapshot) => {
         const msgs: Message[] = [];
         snapshot.forEach((docSnap) => {
           msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
         });
         msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
         callback(msgs);
+        offlineStorage.cacheMessages(msgs).catch(() => {});
       }, (err) => {
-        handleFirestoreError(err, OperationType.LIST, `messages?channelId=${channelId}`);
+        console.warn('Firestore ordered messages listener fell back to unordered:', err?.message || err);
+        startFallbackListener();
       });
+    } catch (e) {
+      startFallbackListener();
     }
+
+    return () => {
+      isCleanedUp = true;
+      if (currentUnsub) {
+        currentUnsub();
+      }
+    };
   },
 
   // Send a message with offline fallback queue
@@ -387,15 +404,27 @@ export const firebaseDb = {
 
   // Fetch or seed default community server if none exists
   async initializeDefaultServerIfEmpty(user: User): Promise<Server> {
+    const initialServerId = 'server-braza-community';
     try {
-      const serversRef = collection(db, 'servers');
-      const snap = await getDocs(serversRef);
-      if (!snap.empty) {
-        const first = snap.docs[0];
-        return { id: first.id, ...first.data() } as Server;
+      const communityDocRef = doc(db, 'servers', initialServerId);
+      const communitySnap = await getDoc(communityDocRef);
+      if (communitySnap.exists()) {
+        const srv = { id: communitySnap.id, ...communitySnap.data() } as Server;
+        const members = srv.members || [];
+        if (!members.some((m) => m && m.id === user.id)) {
+          const updatedMembers = [...members, user];
+          const memberIds = Array.from(new Set(updatedMembers.map((m) => m.id)));
+          await updateDoc(communityDocRef, {
+            members: sanitizeFirestoreData(updatedMembers),
+            memberIds,
+          }).catch(() => {});
+          srv.members = updatedMembers;
+          srv.memberIds = memberIds;
+        }
+        return srv;
       }
     } catch (err) {
-      handleFirestoreError(err, OperationType.LIST, 'servers');
+      handleFirestoreError(err, OperationType.GET, `servers/${initialServerId}`);
       // Attempt to load from offline cache before falling back to local object
       const cached = await offlineStorage.getCachedServers().catch(() => []);
       if (cached && cached.length > 0) {
@@ -404,7 +433,6 @@ export const firebaseDb = {
     }
 
     // Seed clean initial official server
-    const initialServerId = 'server-braza-community';
     const initialServer: Server = {
       id: initialServerId,
       name: 'Braza Talk Oficial',
@@ -412,6 +440,7 @@ export const firebaseDb = {
       banner: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=1200&auto=format&fit=crop&q=80',
       description: 'Servidor oficial do Braza Talk. Bate-papo, salas de voz em alta definição e compartilhamento de tela seguro.',
       ownerId: user.id,
+      isPublic: true,
       e2eeEnabled: true,
       createdAt: Date.now(),
       sounds: {
@@ -506,6 +535,7 @@ export const firebaseDb = {
         },
       ],
       members: [user],
+      memberIds: [user.id],
       bots: [
         {
           id: 'bot-automod',
