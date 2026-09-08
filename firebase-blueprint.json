@@ -69,5 +69,23 @@
       },
       "required": ["id", "channelId", "authorId", "content", "timestamp"]
     }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "users",
+      "description": "User account profiles"
+    },
+    "/servers/{serverId}": {
+      "schema": "servers",
+      "description": "Chat and voice server communities"
+    },
+    "/messages/{messageId}": {
+      "schema": "messages",
+      "description": "Messages posted in server channels"
+    },
+    "/projectRooms/{channelId}": {
+      "schema": "object",
+      "description": "AI Workspace and Mod lab collaborative rooms"
+    }
   }
 }

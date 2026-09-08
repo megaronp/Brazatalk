@@ -1,6 +1,19 @@
 import JSZip from 'jszip';
-import { db, doc, getDoc, setDoc } from './firebase';
+import { db, doc, getDoc, setDoc, auth } from './firebase';
 import { ProjectRoomState, ProjectFile, ProjectAgent, ProjectRagDoc, ProjectLLMProvider, ProjectActionPlan, InterAgentMessage, ProjectAgentActivity, ProjectPendingQuestion } from '../types';
+
+async function getAuthHeader(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    if (auth.currentUser) {
+      const token = await auth.currentUser.getIdToken();
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    }
+  } catch {}
+  return headers;
+}
 
 const LOCAL_STORAGE_KEY_PREFIX = 'braza_project_room_';
 const API_KEYS_STORAGE_KEY = 'braza_llm_api_keys';
@@ -315,8 +328,12 @@ end)`,
     }
     function log(msg) {
       const box = document.getElementById('console-logs');
-      box.innerHTML += '<br>' + msg;
-      box.scrollTop = box.scrollHeight;
+      if (box) {
+        const line = document.createElement('div');
+        line.textContent = msg;
+        box.appendChild(line);
+        box.scrollTop = box.scrollHeight;
+      }
     }
   </script>
 </body>
@@ -519,10 +536,11 @@ export const projectService = {
     } catch {}
 
     // Save to Firestore so other members in the channel see updates in real-time
+    // C4 Security: Strip customApiKey from shared cloud Firestore document
     try {
       const docRef = doc(db, 'projectRooms', channelId);
-      // Clean customApiKey from public cloud doc for security if desired, or keep as shared project key
-      await setDoc(docRef, updatedState, { merge: true });
+      const { customApiKey, ...safeCloudState } = updatedState;
+      await setDoc(docRef, safeCloudState, { merge: true });
     } catch (e) {
       console.warn('Firestore saveProjectState error:', e);
     }
@@ -534,9 +552,10 @@ export const projectService = {
     projectState: ProjectRoomState;
     conversationHistory?: any[];
   }) {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/project/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(params),
     });
 
@@ -607,9 +626,10 @@ ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).joi
 
   // 1. Generate autonomous action plan with AI
   async generatePlan(channelId: string, goal: string, projectState: ProjectRoomState): Promise<ProjectActionPlan> {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/project/plan/generate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ channelId, goal, projectState }),
     });
     if (!res.ok) {
@@ -622,9 +642,10 @@ ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).joi
 
   // 2. Start / resume autonomous plan execution in background
   async startPlan(channelId: string, plan: ProjectActionPlan, projectState: ProjectRoomState) {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/project/plan/start', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ channelId, plan, projectState }),
     });
     if (!res.ok) {
@@ -636,9 +657,10 @@ ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).joi
 
   // 3. Pause autonomous execution
   async pausePlan(channelId: string) {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/project/plan/pause', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ channelId }),
     });
     if (!res.ok) {
@@ -650,9 +672,10 @@ ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).joi
 
   // 4. Answer pending agent doubt/question to resume execution
   async answerPlanQuestion(channelId: string, stepId: string, answer: string) {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/project/plan/answer-question', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({ channelId, stepId, answer }),
     });
     if (!res.ok) {
@@ -665,7 +688,10 @@ ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).joi
   // 5. Query active runner status from server
   async getPlanStatus(channelId: string) {
     try {
-      const res = await fetch(`/api/project/plan/status/${channelId}`);
+      const authHeaders = await getAuthHeader();
+      const res = await fetch(`/api/project/plan/status/${channelId}`, {
+        headers: authHeaders,
+      });
       if (!res.ok) return null;
       return await res.json();
     } catch {

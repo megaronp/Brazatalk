@@ -1,4 +1,16 @@
 import { BotConfig, Message } from '../types';
+import { auth } from './firebase';
+
+async function getAiAuthHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  try {
+    if (auth.currentUser) {
+      const token = await auth.currentUser.getIdToken();
+      if (token) headers['Authorization'] = `Bearer ${token}`;
+    }
+  } catch {}
+  return headers;
+}
 
 export interface BotCommand {
   command: string;
@@ -331,9 +343,10 @@ class BotEngine {
       const query = args.trim() || 'Como utilizar os recursos do Braza Talk?';
 
       try {
+        const headers = await getAiAuthHeaders();
         const res = await fetch('/api/ai/command', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({ command: '/ai', prompt: query, channelName }),
         });
         const data = await res.json();
@@ -366,9 +379,10 @@ class BotEngine {
         .map((m) => `${m.authorName}: ${m.content}`);
 
       try {
+        const headers = await getAiAuthHeaders();
         const res = await fetch('/api/ai/command', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             command: '/summarize',
             channelMessages: formatted,

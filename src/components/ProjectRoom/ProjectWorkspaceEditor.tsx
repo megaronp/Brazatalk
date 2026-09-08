@@ -606,8 +606,15 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                   </div>
                   <iframe
                     title="NUI Preview"
-                    sandbox="allow-scripts allow-modals allow-same-origin"
-                    srcDoc={htmlFile.content}
+                    sandbox="allow-scripts allow-modals"
+                    srcDoc={
+                      htmlFile.content.includes('<head>')
+                        ? htmlFile.content.replace(
+                            '<head>',
+                            `<head><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; font-src https: data:; img-src https: data: blob:; media-src https: data: blob:; connect-src 'none';">`
+                          )
+                        : `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: blob:; style-src 'unsafe-inline' https:; font-src https: data:; img-src https: data: blob:; media-src https: data: blob:; connect-src 'none';">${htmlFile.content}`
+                    }
                     className="w-full flex-1 border-none bg-black min-h-0"
                   />
                 </div>

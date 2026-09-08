@@ -2,6 +2,9 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
@@ -10,7 +13,146 @@ const app = express();
 const server = http.createServer(app);
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+// Trust reverse proxy (Nginx on Oracle VPS)
+app.set('trust proxy', 1);
+
+// Security Headers with Helmet
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+app.use(express.json({ limit: '2mb' }));
+
+// Rate Limiters
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limit_exceeded', message: 'Muitas requisições. Aguarde um momento.' },
+});
+
+const aiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'rate_limit_exceeded', message: 'Limite de chamadas de IA atingido. Tente em instantes.' },
+});
+
+app.use('/api/', apiLimiter);
+app.use('/api/ai/', aiLimiter);
+app.use('/api/project/', aiLimiter);
+
+// Firebase Token Verification Helper for C2 / C3
+let googleCertsCache: { certs: Record<string, string>; expiresAt: number } | null = null;
+async function getGooglePublicCerts(): Promise<Record<string, string>> {
+  if (googleCertsCache && Date.now() < googleCertsCache.expiresAt) {
+    return googleCertsCache.certs;
+  }
+  try {
+    const res = await fetch('https://www.googleapis.com/robot/v1/metadata/x509/securetoken@system.gserviceaccount.com');
+    if (res.ok) {
+      const certs = (await res.json()) as Record<string, string>;
+      const cacheControl = res.headers.get('cache-control') || '';
+      const match = cacheControl.match(/max-age=(\d+)/);
+      const maxAge = match ? parseInt(match[1], 10) * 1000 : 6 * 3600 * 1000;
+      googleCertsCache = { certs, expiresAt: Date.now() + maxAge };
+      return certs;
+    }
+  } catch (err) {
+    console.warn('Failed to fetch Google public certs:', err);
+  }
+  return googleCertsCache?.certs || {};
+}
+
+let firebaseProjectId = 'gen-lang-client-0846705533';
+try {
+  const cfgPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(cfgPath)) {
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    if (cfg.projectId) firebaseProjectId = cfg.projectId;
+  }
+} catch {}
+
+export async function verifyFirebaseIdToken(token: string): Promise<{ uid: string; email?: string; name?: string } | null> {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+
+  try {
+    const header = JSON.parse(Buffer.from(parts[0], 'base64url').toString('utf8'));
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8'));
+
+    if (header.alg !== 'RS256' || !header.kid) return null;
+
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) return null;
+    if (payload.aud !== firebaseProjectId) return null;
+    if (payload.iss !== `https://securetoken.google.com/${firebaseProjectId}`) return null;
+    if (!payload.sub || typeof payload.sub !== 'string') return null;
+
+    const certs = await getGooglePublicCerts();
+    const cert = certs[header.kid];
+    if (cert) {
+      const verifier = crypto.createVerify('RSA-SHA256');
+      verifier.update(`${parts[0]}.${parts[1]}`);
+      const isValid = verifier.verify(cert, parts[2], 'base64url');
+      if (!isValid) return null;
+    } else if (process.env.NODE_ENV === 'production') {
+      return null;
+    }
+
+    return {
+      uid: payload.sub,
+      email: payload.email,
+      name: payload.name || payload.email,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Authentication Middleware for API routes (C2)
+async function requireAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+
+  if (token) {
+    const verified = await verifyFirebaseIdToken(token);
+    if (verified) {
+      (req as any).user = verified;
+      return next();
+    }
+  }
+
+  // Allow development or preview fallback
+  if (process.env.NODE_ENV !== 'production') {
+    (req as any).user = { uid: (req.headers['x-dev-user-id'] as string) || 'dev-user', name: 'Dev User' };
+    return next();
+  }
+
+  return res.status(401).json({
+    error: 'unauthenticated',
+    message: 'Acesso não autorizado. ID Token do Firebase é obrigatório.',
+  });
+}
+
+// AI Timeout Wrapper (A7)
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs = 60000,
+  errorMsg = 'A operação de IA excedeu o tempo limite de 60 segundos.'
+): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(errorMsg)), timeoutMs);
+  });
+  return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timer));
+}
 
 // Lazy-loaded Gemini AI client
 let aiClient: GoogleGenAI | null = null;
@@ -187,6 +329,14 @@ wss.on('connection', (ws) => {
     try {
       const msg = JSON.parse(raw.toString());
 
+      // Ping / Pong Heartbeat (M3)
+      if (msg.type === 'ping') {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'pong' }));
+        }
+        return;
+      }
+
       switch (msg.type) {
         case 'get-voice-state': {
           ws.send(JSON.stringify({
@@ -197,16 +347,45 @@ wss.on('connection', (ws) => {
         }
 
         case 'auth': {
+          let verifiedUserId = clientId;
+          let verifiedUserName = msg.userName || 'Membro';
+          let verifiedAvatar = msg.userAvatar;
+
+          // Verify Firebase ID Token if provided (C3)
+          if (msg.token) {
+            verifyFirebaseIdToken(msg.token).then((verified) => {
+              if (verified) {
+                verifiedUserId = verified.uid;
+                verifiedUserName = verified.name || msg.userName || 'Membro';
+                const oldClientId = clientId;
+                clientId = verifiedUserId;
+                if (oldClientId !== clientId) {
+                  clients.delete(oldClientId);
+                }
+                clients.set(clientId, {
+                  ws,
+                  userId: verifiedUserId,
+                  userName: verifiedUserName,
+                  userAvatar: verifiedAvatar,
+                  currentChannelId: msg.channelId,
+                });
+              }
+            }).catch(() => {});
+          } else if (msg.userId) {
+            // Unauthenticated guest identity is isolated with prefix
+            verifiedUserId = msg.userId.startsWith('guest-') ? msg.userId : `guest-${msg.userId}`;
+          }
+
           const oldClientId = clientId;
-          clientId = msg.userId || clientId;
+          clientId = verifiedUserId;
           if (oldClientId !== clientId) {
             clients.delete(oldClientId);
           }
           clients.set(clientId, {
             ws,
-            userId: msg.userId,
-            userName: msg.userName,
-            userAvatar: msg.userAvatar,
+            userId: verifiedUserId,
+            userName: verifiedUserName,
+            userAvatar: verifiedAvatar,
             currentChannelId: msg.channelId,
           });
 
@@ -219,26 +398,27 @@ wss.on('connection', (ws) => {
         }
 
         case 'user-profile-updated': {
-          clients.forEach((client) => {
-            if (client.userId === msg.userId || client.ws === ws) {
-              if (msg.userName) client.userName = msg.userName;
-              if (msg.userAvatar) client.userAvatar = msg.userAvatar;
-              if (msg.channelId && !client.currentChannelId) client.currentChannelId = msg.channelId;
-            }
-          });
+          const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
 
-          const p = voiceParticipants.get(msg.userId);
+          if (client) {
+            if (msg.userName) client.userName = msg.userName;
+            if (msg.userAvatar) client.userAvatar = msg.userAvatar;
+            if (msg.channelId && !client.currentChannelId) client.currentChannelId = msg.channelId;
+          }
+
+          const p = voiceParticipants.get(effectiveUserId);
           if (p) {
             if (msg.userName) p.userName = msg.userName;
             if (msg.userAvatar) p.userAvatar = msg.userAvatar;
           }
 
-          // Broadcast to all clients to update voice participants, member lists, and active rooms immediately
+          // Broadcast strictly bound to verified effectiveUserId
           broadcast({
             type: 'user-profile-updated',
-            userId: msg.userId,
-            userName: msg.userName,
-            userAvatar: msg.userAvatar,
+            userId: effectiveUserId,
+            userName: msg.userName || client?.userName || 'Membro',
+            userAvatar: msg.userAvatar || client?.userAvatar,
             status: msg.status,
             customStatus: msg.customStatus,
             bio: msg.bio,
@@ -251,22 +431,17 @@ wss.on('connection', (ws) => {
           break;
         }
 
-        case 'chat-message': {
-          // Broadcast message to all users in the server / channel
-          broadcast({
-            type: 'chat-message',
-            message: msg.message,
-          });
-          break;
-        }
+        // M7: chat-message dead code removed (messages are synchronized strictly via Firestore)
 
         case 'typing': {
+          const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
           broadcast(
             {
               type: 'typing',
               channelId: msg.channelId,
-              userId: msg.userId,
-              userName: msg.userName,
+              userId: effectiveUserId,
+              userName: client?.userName || msg.userName || 'Membro',
               isTyping: msg.isTyping,
             },
             ws
@@ -276,11 +451,12 @@ wss.on('connection', (ws) => {
 
         case 'join-voice': {
           const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
+          const effectiveName = client?.userName || msg.userName || 'Membro';
+          const effectiveAvatar = client?.userAvatar || msg.userAvatar;
+
           if (client) {
             client.currentChannelId = msg.channelId;
-            client.userId = msg.userId || client.userId;
-            client.userName = msg.userName || client.userName;
-            client.userAvatar = msg.userAvatar || client.userAvatar;
             client.isMuted = msg.isMuted || false;
             client.isDeafened = msg.isDeafened || false;
             client.isScreenSharing = false;
@@ -288,9 +464,9 @@ wss.on('connection', (ws) => {
           }
 
           const newParticipant: ServerVoiceParticipant = {
-            userId: msg.userId,
-            userName: msg.userName,
-            userAvatar: msg.userAvatar,
+            userId: effectiveUserId,
+            userName: effectiveName,
+            userAvatar: effectiveAvatar,
             channelId: msg.channelId,
             isMuted: msg.isMuted || false,
             isDeafened: msg.isDeafened || false,
@@ -301,7 +477,7 @@ wss.on('connection', (ws) => {
             joinedAt: Date.now(),
           };
 
-          voiceParticipants.set(msg.userId, newParticipant);
+          voiceParticipants.set(effectiveUserId, newParticipant);
 
           // Broadcast user joined sound & presence event
           broadcast({
@@ -320,6 +496,7 @@ wss.on('connection', (ws) => {
 
         case 'leave-voice': {
           const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
           const oldChannelId = client?.currentChannelId || msg.channelId;
           if (client) {
             client.currentChannelId = undefined;
@@ -327,13 +504,13 @@ wss.on('connection', (ws) => {
             client.isStreamingVideo = false;
           }
 
-          voiceParticipants.delete(msg.userId);
+          voiceParticipants.delete(effectiveUserId);
 
           broadcast({
             type: 'voice-user-left',
             channelId: oldChannelId,
-            userId: msg.userId,
-            userName: msg.userName,
+            userId: effectiveUserId,
+            userName: client?.userName || msg.userName,
           });
 
           broadcast({
@@ -345,6 +522,8 @@ wss.on('connection', (ws) => {
 
         case 'voice-state-update': {
           const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
+
           if (client) {
             if (msg.isMuted !== undefined) client.isMuted = msg.isMuted;
             if (msg.isDeafened !== undefined) client.isDeafened = msg.isDeafened;
@@ -353,7 +532,7 @@ wss.on('connection', (ws) => {
             if (msg.isCameraOn !== undefined) client.isStreamingVideo = msg.isCameraOn;
           }
 
-          const p = voiceParticipants.get(msg.userId);
+          const p = voiceParticipants.get(effectiveUserId);
           if (p) {
             if (msg.isMuted !== undefined) p.isMuted = msg.isMuted;
             if (msg.isDeafened !== undefined) p.isDeafened = msg.isDeafened;
@@ -365,7 +544,7 @@ wss.on('connection', (ws) => {
           broadcast({
             type: 'voice-state-changed',
             channelId: msg.channelId,
-            userId: msg.userId,
+            userId: effectiveUserId,
             updates: {
               isMuted: msg.isMuted,
               isDeafened: msg.isDeafened,
@@ -384,17 +563,18 @@ wss.on('connection', (ws) => {
 
         case 'start-screen-share': {
           const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
           if (client) client.isScreenSharing = true;
 
-          const p = voiceParticipants.get(msg.userId);
+          const p = voiceParticipants.get(effectiveUserId);
           if (p) p.isScreenSharing = true;
 
           broadcast({
             type: 'screen-share-started',
             channelId: msg.channelId,
-            userId: msg.userId,
-            userName: msg.userName,
-            streamTitle: msg.streamTitle || `${msg.userName}'s Screen`,
+            userId: effectiveUserId,
+            userName: client?.userName || msg.userName,
+            streamTitle: msg.streamTitle || `${client?.userName || msg.userName}'s Screen`,
           });
 
           broadcast({
@@ -406,16 +586,17 @@ wss.on('connection', (ws) => {
 
         case 'stop-screen-share': {
           const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
           if (client) client.isScreenSharing = false;
 
-          const p = voiceParticipants.get(msg.userId);
+          const p = voiceParticipants.get(effectiveUserId);
           if (p) p.isScreenSharing = false;
 
           broadcast({
             type: 'screen-share-stopped',
             channelId: msg.channelId,
-            userId: msg.userId,
-            userName: msg.userName,
+            userId: effectiveUserId,
+            userName: client?.userName || msg.userName,
           });
 
           broadcast({
@@ -426,27 +607,31 @@ wss.on('connection', (ws) => {
         }
 
         case 'watch-stream': {
-          // When a user starts viewing another participant's live stream
+          const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
           broadcast({
             type: 'stream-viewer-joined',
             channelId: msg.channelId,
             streamerUserId: msg.streamerUserId,
-            viewerUserId: msg.viewerUserId,
-            viewerUserName: msg.viewerUserName,
+            viewerUserId: effectiveUserId,
+            viewerUserName: client?.userName || msg.viewerUserName || 'Espectador',
           });
           break;
         }
 
         case 'webrtc-signal': {
-          // Relay WebRTC signaling (offer / answer / ice-candidate)
+          // Relay WebRTC signaling with strictly verified sender fromUserId (C3)
+          const client = clients.get(clientId);
+          const effectiveSenderId = client?.userId || clientId;
+
           if (msg.toUserId) {
             let delivered = false;
-            clients.forEach((client) => {
-              if (client.userId === msg.toUserId && client.ws.readyState === WebSocket.OPEN) {
-                client.ws.send(JSON.stringify({
+            clients.forEach((c) => {
+              if (c.userId === msg.toUserId && c.ws.readyState === WebSocket.OPEN) {
+                c.ws.send(JSON.stringify({
                   type: 'webrtc-signal',
                   channelId: msg.channelId,
-                  fromUserId: msg.fromUserId,
+                  fromUserId: effectiveSenderId,
                   toUserId: msg.toUserId,
                   signal: msg.signal,
                 }));
@@ -456,7 +641,7 @@ wss.on('connection', (ws) => {
             if (!delivered) {
               broadcastToChannel(msg.channelId, {
                 type: 'webrtc-signal',
-                fromUserId: msg.fromUserId,
+                fromUserId: effectiveSenderId,
                 toUserId: msg.toUserId,
                 signal: msg.signal,
               }, ws);
@@ -464,7 +649,7 @@ wss.on('connection', (ws) => {
           } else {
             broadcastToChannel(msg.channelId, {
               type: 'webrtc-signal',
-              fromUserId: msg.fromUserId,
+              fromUserId: effectiveSenderId,
               toUserId: msg.toUserId,
               signal: msg.signal,
             }, ws);
@@ -515,8 +700,8 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', serverTime: Date.now(), connectedClients: clients.size });
 });
 
-// Real AI Command Handler (Gemini 2.5 Flash)
-app.post('/api/ai/command', async (req, res) => {
+// Real AI Command Handler (Gemini 2.5 Flash) with Auth and Timeout (C2, A7)
+app.post('/api/ai/command', requireAuth, async (req, res) => {
   const { command, prompt, channelMessages, channelName } = req.body;
 
   const ai = getAiClient();
@@ -543,10 +728,14 @@ Gere um resumo em português com:
 - Decisões ou conclusões tomadas
 - Tom de conversa objetivo e bem formatado em Markdown.`;
 
-      const response = await generateWithFallback(ai, {
-        model: 'gemini-flash-latest',
-        contents: promptText,
-      });
+      const response = await withTimeout(
+        generateWithFallback(ai, {
+          model: 'gemini-flash-latest',
+          contents: promptText,
+        }),
+        60000,
+        'O resumo de IA demorou mais de 60 segundos para ser gerado.'
+      );
 
       return res.json({
         success: true,
@@ -556,13 +745,17 @@ Gere um resumo em português com:
 
     // Default /ai <pergunta>
     const userQuery = prompt || 'Como usar o Braza Talk?';
-    const response = await generateWithFallback(ai, {
-      model: 'gemini-flash-latest',
-      contents: userQuery,
-      config: {
-        systemInstruction: 'Você é o Braza Bot, assistente oficial do Braza Talk (aplicativo de comunicação em tempo real com voz, vídeo, chat e canais). Responda com simpatia, precisão, concisão e formatação amigável em Markdown em português.',
-      },
-    });
+    const response = await withTimeout(
+      generateWithFallback(ai, {
+        model: 'gemini-flash-latest',
+        contents: userQuery,
+        config: {
+          systemInstruction: 'Você é o Braza Bot, assistente oficial do Braza Talk (aplicativo de comunicação em tempo real com voz, vídeo, chat e canais). Responda com simpatia, precisão, concisão e formatação amigável em Markdown em português.',
+        },
+      }),
+      60000,
+      'A resposta do Braza Bot excedeu o tempo limite de 60 segundos.'
+    );
 
     return res.json({
       success: true,
@@ -583,7 +776,7 @@ Gere um resumo em português com:
 });
 
 // Multi-LLM Collaborative Project Room Generator (Gemini, OpenAI, Claude, Groq, DeepSeek, Ollama)
-app.post('/api/project/generate', async (req, res) => {
+app.post('/api/project/generate', requireAuth, async (req, res) => {
   const {
     prompt,
     mentionedAgentHandle,
@@ -717,13 +910,17 @@ No texto da sua resposta:
       ) {
         modelName = 'gemini-flash-latest';
       }
-      const response = await generateWithFallback(client, {
-        model: modelName,
-        contents: fullPrompt,
-        config: {
-          systemInstruction,
-        },
-      });
+      const response = await withTimeout(
+        generateWithFallback(client, {
+          model: modelName,
+          contents: fullPrompt,
+          config: {
+            systemInstruction,
+          },
+        }),
+        60000,
+        'O processamento de IA do projeto excedeu o limite de 60 segundos.'
+      );
       rawReplyText = response.text || '';
     } else if (provider === 'openai' || provider === 'groq' || provider === 'deepseek' || provider === 'custom') {
       const apiKey = customApiKey?.trim() || (provider === 'groq' ? process.env.GROQ_API_KEY : process.env.OPENAI_API_KEY);
@@ -943,7 +1140,56 @@ interface ProjectRunnerState {
 
 const projectRunners = new Map<string, ProjectRunnerState>();
 
+const RUNNERS_STORAGE_DIR = path.join(process.cwd(), 'storage', 'runners');
+try {
+  if (!fs.existsSync(RUNNERS_STORAGE_DIR)) {
+    fs.mkdirSync(RUNNERS_STORAGE_DIR, { recursive: true });
+  }
+} catch {}
+
+function saveRunnerToDisk(runner: ProjectRunnerState) {
+  try {
+    const filePath = path.join(RUNNERS_STORAGE_DIR, `${runner.channelId}.json`);
+    const cleanState = {
+      channelId: runner.channelId,
+      plan: runner.plan,
+      agenticActivities: runner.agenticActivities,
+      interAgentDialogues: runner.interAgentDialogues.slice(-60),
+      pendingUserQuestion: runner.pendingUserQuestion,
+      projectState: {
+        ...runner.projectState,
+        customApiKey: undefined, // Never save sensitive API keys
+      },
+      savedAt: Date.now(),
+    };
+    fs.writeFileSync(filePath, JSON.stringify(cleanState, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('Failed to save runner to disk:', e);
+  }
+}
+
+function loadRunnerFromDisk(channelId: string): ProjectRunnerState | null {
+  try {
+    const filePath = path.join(RUNNERS_STORAGE_DIR, `${channelId}.json`);
+    if (fs.existsSync(filePath)) {
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      return {
+        channelId: data.channelId,
+        plan: data.plan,
+        agenticActivities: data.agenticActivities || {},
+        interAgentDialogues: data.interAgentDialogues || [],
+        pendingUserQuestion: data.pendingUserQuestion || null,
+        projectState: data.projectState || {},
+        isExecuting: false,
+        paused: true,
+      };
+    }
+  } catch {}
+  return null;
+}
+
 function broadcastPlanUpdate(runner: ProjectRunnerState, extra?: any) {
+  saveRunnerToDisk(runner);
   broadcast({
     type: 'project-plan-updated',
     channelId: runner.channelId,
@@ -1312,7 +1558,7 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
 }
 
 // 1. Generate Intelligent Action Plan
-app.post('/api/project/plan/generate', async (req, res) => {
+app.post('/api/project/plan/generate', requireAuth, async (req, res) => {
   const { channelId, goal, projectState } = req.body;
   if (!goal) {
     return res.status(400).json({ success: false, error: 'O objetivo do plano é obrigatório.' });
@@ -1421,7 +1667,7 @@ Responda ESTRITAMENTE em formato JSON com a seguinte estrutura exata (sem format
 });
 
 // 2. Start / Resume Autonomous Plan Execution in Background
-app.post('/api/project/plan/start', (req, res) => {
+app.post('/api/project/plan/start', requireAuth, (req, res) => {
   const { channelId, plan, projectState } = req.body;
   if (!channelId || !plan) {
     return res.status(400).json({ success: false, error: 'channelId e plan são obrigatórios.' });
@@ -1474,7 +1720,7 @@ app.post('/api/project/plan/start', (req, res) => {
 });
 
 // 3. Pause Autonomous Plan Execution
-app.post('/api/project/plan/pause', (req, res) => {
+app.post('/api/project/plan/pause', requireAuth, (req, res) => {
   const { channelId } = req.body;
   const runner = projectRunners.get(channelId);
   if (!runner) {
@@ -1499,7 +1745,7 @@ app.post('/api/project/plan/pause', (req, res) => {
 });
 
 // 4. Answer Pending Agent Question & Resume Execution
-app.post('/api/project/plan/answer-question', (req, res) => {
+app.post('/api/project/plan/answer-question', requireAuth, (req, res) => {
   const { channelId, stepId, answer } = req.body;
   const runner = projectRunners.get(channelId);
   if (!runner) {
@@ -1538,9 +1784,17 @@ app.post('/api/project/plan/answer-question', (req, res) => {
 });
 
 // 5. Query Autonomous Plan Status
-app.get('/api/project/plan/status/:channelId', (req, res) => {
+app.get('/api/project/plan/status/:channelId', requireAuth, (req, res) => {
   const { channelId } = req.params;
-  const runner = projectRunners.get(channelId);
+  let runner = projectRunners.get(channelId);
+  if (!runner) {
+    const diskRunner = loadRunnerFromDisk(channelId);
+    if (diskRunner) {
+      projectRunners.set(channelId, diskRunner);
+      runner = diskRunner;
+    }
+  }
+
   if (!runner) {
     return res.json({ success: true, exists: false, runner: null });
   }
@@ -1556,21 +1810,34 @@ app.get('/api/project/plan/status/:channelId', (req, res) => {
   });
 });
 
-// Helper to detect current origin URL for desktop installers
-function getRequestOrigin(req: express.Request): string {
+// Helper to securely detect current origin URL for desktop installers (C1, M8)
+const SAFE_URL_REGEX = /^https?:\/\/[a-zA-Z0-9.-]+(:[0-9]{1,5})?$/;
+const SAFE_HOST_REGEX = /^[a-zA-Z0-9.-]+(:[0-9]{1,5})?$/;
+
+function getSafeAppOrigin(req: express.Request): string {
+  const envUrl = process.env.PUBLIC_APP_URL || process.env.APP_URL;
+  if (envUrl && SAFE_URL_REGEX.test(envUrl.trim())) {
+    return envUrl.trim();
+  }
+
   const forwardedProto = req.headers['x-forwarded-proto'];
-  const proto = typeof forwardedProto === 'string' ? forwardedProto.split(',')[0].trim() : req.protocol || 'https';
-  const host = req.headers['x-forwarded-host'] || req.get('host') || 'localhost:3000';
-  return `${proto}://${host}`;
+  const rawProto = typeof forwardedProto === 'string' ? forwardedProto.split(',')[0].trim() : req.protocol;
+  const proto = rawProto === 'http' ? 'http' : 'https';
+
+  const rawHost = String(req.headers['x-forwarded-host'] || req.get('host') || `localhost:${PORT}`).trim();
+  if (SAFE_HOST_REGEX.test(rawHost)) {
+    return `${proto}://${rawHost}`;
+  }
+
+  return `http://localhost:${PORT}`;
 }
 
-// Serve direct download packages for Desktop with dynamic origin injection
+// Serve direct download packages for Desktop with safe origin injection (No req.query.url allowed)
 app.get('/downloads/BrazaTalk-Setup.cmd', (req, res) => {
-  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const origin = getSafeAppOrigin(req);
   const filePath = path.join(process.cwd(), 'public', 'downloads', 'BrazaTalk-Setup.cmd');
   try {
     let content = fs.readFileSync(filePath, 'utf-8');
-    // Replace default URL with client origin
     content = content.replace(/set "DEFAULT_URL=.*"/, `set "DEFAULT_URL=${origin}"`);
     res.setHeader('Content-Type', 'application/x-msdos-program');
     res.setHeader('Content-Disposition', 'attachment; filename="BrazaTalk-Setup.cmd"');
@@ -1581,7 +1848,7 @@ app.get('/downloads/BrazaTalk-Setup.cmd', (req, res) => {
 });
 
 app.get('/downloads/install-linux.sh', (req, res) => {
-  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const origin = getSafeAppOrigin(req);
   const filePath = path.join(process.cwd(), 'public', 'downloads', 'install-linux.sh');
   try {
     let content = fs.readFileSync(filePath, 'utf-8');
@@ -1595,7 +1862,7 @@ app.get('/downloads/install-linux.sh', (req, res) => {
 });
 
 app.get('/downloads/BrazaTalk-macOS.command', (req, res) => {
-  const origin = (req.query.url as string) || getRequestOrigin(req);
+  const origin = getSafeAppOrigin(req);
   const filePath = path.join(process.cwd(), 'public', 'downloads', 'BrazaTalk-macOS.command');
   try {
     let content = fs.readFileSync(filePath, 'utf-8');
@@ -1618,7 +1885,7 @@ app.get('/downloads/brazatalk_2.6.0_all.deb', (req, res) => {
 // Fallback for static downloads
 app.use('/downloads', express.static(path.join(process.cwd(), 'public', 'downloads')));
 
-app.post('/api/push-notification', (req, res) => {
+app.post('/api/push-notification', requireAuth, (req, res) => {
   const { title, body, userId } = req.body;
   // Push notification simulator/dispatch
   res.json({ success: true, deliveredAt: Date.now(), title, body, recipient: userId || 'all' });

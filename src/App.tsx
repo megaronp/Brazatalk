@@ -474,18 +474,34 @@ export default function App() {
       }
     });
 
-    // 2. Connect to Real-time WebSocket for Voice/Video WebRTC signals
+    // 2. Connect to Real-time WebSocket with Heartbeat and Exponential Reconnection
+    let reconnectTimeout: any = null;
+    let heartbeatInterval: any = null;
+    let reconnectDelay = 1000;
+    let isDisposed = false;
+
     const connectWS = () => {
+      if (isDisposed) return;
       try {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${protocol}//${window.location.host}/ws`;
         const socket = new WebSocket(wsUrl);
 
-        socket.onopen = () => {
-          if (currentUser.id && currentUser.id !== 'guest') {
+        socket.onopen = async () => {
+          reconnectDelay = 1000; // Reset backoff upon successful connection
+
+          let token = '';
+          try {
+            if (auth.currentUser) {
+              token = await auth.currentUser.getIdToken();
+            }
+          } catch {}
+
+          if (currentUser.id) {
             socket.send(
               JSON.stringify({
                 type: 'auth',
+                token,
                 userId: currentUser.id,
                 userName: currentUser.name,
                 userAvatar: currentUser.avatar,
@@ -493,15 +509,40 @@ export default function App() {
               })
             );
           }
+
+          // Start 30s heartbeat ping to keep connection alive through Nginx proxies
+          clearInterval(heartbeatInterval);
+          heartbeatInterval = setInterval(() => {
+            if (socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 30000);
         };
 
         socket.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
+            if (data.type === 'pong') return;
             handleIncomingWSEvent(data);
           } catch (e) {
             console.warn('WS message error:', e);
           }
+        };
+
+        socket.onclose = () => {
+          clearInterval(heartbeatInterval);
+          if (!isDisposed) {
+            // Reconnect with exponential backoff (1s -> 30s)
+            clearTimeout(reconnectTimeout);
+            reconnectTimeout = setTimeout(() => {
+              reconnectDelay = Math.min(reconnectDelay * 1.5, 30000);
+              connectWS();
+            }, reconnectDelay);
+          }
+        };
+
+        socket.onerror = () => {
+          socket.close();
         };
 
         wsRef.current = socket;
@@ -522,6 +563,9 @@ export default function App() {
     const syncTimer = setInterval(handleWindowFocus, 5000);
 
     return () => {
+      isDisposed = true;
+      clearTimeout(reconnectTimeout);
+      clearInterval(heartbeatInterval);
       window.removeEventListener('focus', handleWindowFocus);
       clearInterval(syncTimer);
       unsubscribeNetwork();

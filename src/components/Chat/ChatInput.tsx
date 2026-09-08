@@ -111,6 +111,15 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const processFile = (file: File) => {
     if (!file) return;
 
+    // Hard limit: 700 KB for direct inline base64 to stay under Firestore's 1MB document limit
+    const MAX_FILE_SIZE = 700 * 1024;
+    if (file.size > MAX_FILE_SIZE) {
+      alert(
+        `O arquivo "${file.name}" (${(file.size / 1024 / 1024).toFixed(2)} MB) ultrapassa o limite de 700 KB permitido para anexos inline no chat.`
+      );
+      return;
+    }
+
     if (file.type.startsWith('image/')) {
       const reader = new FileReader();
       reader.onload = (event) => {

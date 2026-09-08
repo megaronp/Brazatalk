@@ -10,6 +10,26 @@ export interface KeyPairResult {
   fingerprint: string;
 }
 
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+    binary += String.fromCharCode.apply(null, chunk as any);
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
 class E2EEService {
   private channelKeys: Map<string, CryptoKey> = new Map();
   private userFingerprint: string = '';
@@ -137,8 +157,8 @@ class E2EEService {
         encodedText
       );
 
-      const ciphertext = btoa(String.fromCharCode(...new Uint8Array(cipherBuffer)));
-      const ivString = btoa(String.fromCharCode(...iv));
+      const ciphertext = uint8ArrayToBase64(new Uint8Array(cipherBuffer));
+      const ivString = uint8ArrayToBase64(iv);
 
       return { ciphertext, iv: ivString, algorithm: 'AES-GCM-256' };
     } catch (e) {
@@ -162,16 +182,8 @@ class E2EEService {
         return ciphertext;
       }
 
-      const ivBytes = new Uint8Array(
-        atob(ivString)
-          .split('')
-          .map((c) => c.charCodeAt(0))
-      );
-      const cipherBytes = new Uint8Array(
-        atob(ciphertext)
-          .split('')
-          .map((c) => c.charCodeAt(0))
-      );
+      const ivBytes = base64ToUint8Array(ivString);
+      const cipherBytes = base64ToUint8Array(ciphertext);
 
       const decryptedBuffer = await window.crypto.subtle.decrypt(
         {

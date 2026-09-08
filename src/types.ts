@@ -191,6 +191,9 @@ export interface Server {
   categories: Category[];
   channels: Channel[];
   members: User[];
+  memberIds?: string[];
+  isPublic?: boolean;
+  inviteCode?: string;
   bots: BotConfig[];
   auditLogs: AuditLogEntry[];
   sounds: ServerSoundCustomization;

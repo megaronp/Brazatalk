@@ -1,4 +1,5 @@
 import { 
+  auth,
   db, 
   collection, 
   doc, 
@@ -15,6 +16,53 @@ import {
 } from './firebase';
 import { Server, Message, User, Permission, ChannelType } from '../types';
 import { offlineStorage } from './offlineStorage';
+
+export enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+export interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  };
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map((provider) => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || [],
+    },
+    operationType,
+    path,
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  return errInfo;
+}
 
 /**
  * Recursively strips undefined fields from an object/array so Firestore setDoc/updateDoc never rejects it.
@@ -89,7 +137,13 @@ export const firebaseDb = {
       callback(userServers);
       offlineStorage.cacheServers(userServers).catch(() => {});
     }, (err) => {
-      console.error('Firestore subscribeToServers error:', err);
+      handleFirestoreError(err, OperationType.LIST, 'servers');
+      // Graceful fallback to offline cache so user experience remains uninterrupted
+      offlineStorage.getCachedServers().then((cached) => {
+        if (cached && cached.length > 0) {
+          callback(cached);
+        }
+      }).catch(() => {});
     });
   },
 
@@ -131,8 +185,10 @@ export const firebaseDb = {
 
       if (!alreadyMember) {
         const updatedMembers = [...members, user];
-        await setDoc(serverRef, sanitizeFirestoreData({ ...serverData, members: updatedMembers }), { merge: true });
+        const memberIds = Array.from(new Set(updatedMembers.map((m) => m.id)));
+        await setDoc(serverRef, sanitizeFirestoreData({ ...serverData, members: updatedMembers, memberIds }), { merge: true });
         serverData.members = updatedMembers;
+        serverData.memberIds = memberIds;
       }
 
       return serverData;
@@ -178,9 +234,20 @@ export const firebaseDb = {
   // Save or update server
   async saveServer(server: Server) {
     const serverRef = doc(db, 'servers', server.id);
-    const cleaned = sanitizeFirestoreData(server);
+    const memberIds = Array.from(
+      new Set([
+        ...(server.members || []).map((m) => m.id),
+        server.ownerId,
+      ].filter(Boolean))
+    );
+    const enrichedServer: Server = {
+      ...server,
+      memberIds,
+      isPublic: server.id === 'server-braza-community' || server.isPublic === true,
+    };
+    const cleaned = sanitizeFirestoreData(enrichedServer);
     await setDoc(serverRef, cleaned, { merge: true });
-    offlineStorage.cacheServers([server]).catch(() => {});
+    offlineStorage.cacheServers([enrichedServer]).catch(() => {});
   },
 
   // Delete server
@@ -198,24 +265,62 @@ export const firebaseDb = {
     }).catch(() => {});
 
     const messagesRef = collection(db, 'messages');
-    const q = query(
-      messagesRef, 
-      where('channelId', '==', channelId),
-      limit(maxCount)
-    );
     
-    return onSnapshot(q, (snapshot) => {
-      const msgs: Message[] = [];
-      snapshot.forEach((docSnap) => {
-        msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+    // Attempt ordered query by timestamp descending (latest messages)
+    try {
+      const q = query(
+        messagesRef, 
+        where('channelId', '==', channelId),
+        orderBy('timestamp', 'desc'),
+        limit(maxCount)
+      );
+      
+      return onSnapshot(q, (snapshot) => {
+        const msgs: Message[] = [];
+        snapshot.forEach((docSnap) => {
+          msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+        });
+        // Present in ascending order for chat window display
+        msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        callback(msgs);
+        offlineStorage.cacheMessages(msgs).catch(() => {});
+      }, (err) => {
+        console.warn('Firestore ordered messages listener fell back to unordered:', err?.message || err);
+        // Fallback in case composite index is not yet built
+        const fallbackQ = query(
+          messagesRef,
+          where('channelId', '==', channelId),
+          limit(maxCount)
+        );
+        return onSnapshot(fallbackQ, (fallbackSnap) => {
+          const msgs: Message[] = [];
+          fallbackSnap.forEach((docSnap) => {
+            msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+          });
+          msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          callback(msgs);
+          offlineStorage.cacheMessages(msgs).catch(() => {});
+        }, (fallbackErr) => {
+          handleFirestoreError(fallbackErr, OperationType.LIST, `messages?channelId=${channelId}`);
+          offlineStorage.getCachedMessages(channelId).then((cached) => {
+            if (cached && cached.length > 0) callback(cached);
+          }).catch(() => {});
+        });
       });
-      // Sort chronologically by timestamp
-      msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-      callback(msgs);
-      offlineStorage.cacheMessages(msgs).catch(() => {});
-    }, (err) => {
-      console.error('Firestore subscribeToChannelMessages error:', err);
-    });
+    } catch (e) {
+      // Fallback if query creation fails
+      const fallbackQ = query(messagesRef, where('channelId', '==', channelId), limit(maxCount));
+      return onSnapshot(fallbackQ, (snapshot) => {
+        const msgs: Message[] = [];
+        snapshot.forEach((docSnap) => {
+          msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+        });
+        msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+        callback(msgs);
+      }, (err) => {
+        handleFirestoreError(err, OperationType.LIST, `messages?channelId=${channelId}`);
+      });
+    }
   },
 
   // Send a message with offline fallback queue
@@ -282,11 +387,20 @@ export const firebaseDb = {
 
   // Fetch or seed default community server if none exists
   async initializeDefaultServerIfEmpty(user: User): Promise<Server> {
-    const serversRef = collection(db, 'servers');
-    const snap = await getDocs(serversRef);
-    if (!snap.empty) {
-      const first = snap.docs[0];
-      return { id: first.id, ...first.data() } as Server;
+    try {
+      const serversRef = collection(db, 'servers');
+      const snap = await getDocs(serversRef);
+      if (!snap.empty) {
+        const first = snap.docs[0];
+        return { id: first.id, ...first.data() } as Server;
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.LIST, 'servers');
+      // Attempt to load from offline cache before falling back to local object
+      const cached = await offlineStorage.getCachedServers().catch(() => []);
+      if (cached && cached.length > 0) {
+        return cached[0];
+      }
     }
 
     // Seed clean initial official server
@@ -411,7 +525,13 @@ export const firebaseDb = {
       auditLogs: [],
     };
 
-    await setDoc(doc(db, 'servers', initialServerId), initialServer);
+    try {
+      await setDoc(doc(db, 'servers', initialServerId), sanitizeFirestoreData(initialServer));
+      offlineStorage.cacheServers([initialServer]).catch(() => {});
+    } catch (writeErr) {
+      handleFirestoreError(writeErr, OperationType.WRITE, `servers/${initialServerId}`);
+      offlineStorage.cacheServers([initialServer]).catch(() => {});
+    }
     return initialServer;
   }
 };

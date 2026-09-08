@@ -11,33 +11,63 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    // Admin check with bootstrapped owner
+    function isAdmin() {
+      return isAuthenticated() && (
+        request.auth.token.email == 'megaronp@gmail.com' ||
+        request.auth.token.admin == true
+      );
+    }
+
     // Users Collection: users can only manage their own profile document
     match /users/{userId} {
       allow read: if isAuthenticated();
-      allow create: if isOwner(userId);
-      allow update: if isOwner(userId);
-      allow delete: if isOwner(userId);
+      allow create: if isOwner(userId) || isAdmin();
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Servers Collection: strictly protect ownership and server settings
+    // Servers Collection: authenticated users can discover & read servers; updates protected
     match /servers/{serverId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      allow create: if isAuthenticated() && (
+        request.resource.data.ownerId == request.auth.uid ||
+        serverId == 'server-braza-community' ||
+        isAdmin()
+      );
       allow update: if isAuthenticated() && (
         // Server owner can update server config, keeping ownerId immutable
         (resource.data.ownerId == request.auth.uid && request.resource.data.ownerId == resource.data.ownerId) ||
-        // Members joining/leaving can only modify members/memberIds arrays, keeping ownerId and config intact
+        // Members joining/leaving can modify members/memberIds arrays, keeping ownerId and config intact
         (request.resource.data.ownerId == resource.data.ownerId &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberIds']))
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberIds'])) ||
+        // Official community server sandbox allows members to collaborate on channels/settings
+        (serverId == 'server-braza-community' && request.resource.data.ownerId == resource.data.ownerId) ||
+        // Admin
+        isAdmin()
       );
-      allow delete: if isAuthenticated() && resource.data.ownerId == request.auth.uid;
+      allow delete: if isAuthenticated() && (
+        resource.data.ownerId == request.auth.uid ||
+        isAdmin()
+      );
+    }
+
+    // Project Rooms (Workspace / Autonomous AI mod development rooms)
+    match /projectRooms/{channelId} {
+      allow read: if isAuthenticated();
+      allow write: if isAuthenticated();
     }
 
     // Messages Collection: prevent authorship forgery and arbitrary edits
     match /messages/{messageId} {
       allow read: if isAuthenticated();
-      // Only authenticated users sending as themselves can create messages
-      allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
+      // Authenticated users sending as themselves or on behalf of client bot integration
+      allow create: if isAuthenticated() && (
+        request.resource.data.authorId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.isBot == true ||
+        isAdmin()
+      );
       // Authors can edit their text; other members can only react or toggle pin
       allow update: if isAuthenticated() && (
         // Author editing content (immutability for authorId and channelId)
@@ -49,29 +79,36 @@ service cloud.firestore {
         (request.resource.data.authorId == resource.data.authorId &&
          request.resource.data.channelId == resource.data.channelId &&
          request.resource.data.content == resource.data.content &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned']))
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned'])) ||
+        isAdmin()
       );
       allow delete: if isAuthenticated() && (
         resource.data.authorId == request.auth.uid ||
-        request.auth.token.admin == true
+        isAdmin()
       );
     }
 
     // Subcollection messages inside servers/channels
     match /servers/{serverId}/channels/{channelId}/messages/{messageId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
+      allow create: if isAuthenticated() && (
+        request.resource.data.authorId == request.auth.uid ||
+        request.resource.data.userId == request.auth.uid ||
+        request.resource.data.isBot == true ||
+        isAdmin()
+      );
       allow update: if isAuthenticated() && (
         (resource.data.authorId == request.auth.uid &&
          request.resource.data.authorId == resource.data.authorId &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'encryptedContent', 'editedAt'])) ||
         (request.resource.data.authorId == resource.data.authorId &&
          request.resource.data.content == resource.data.content &&
-         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned']))
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned', 'isPinned'])) ||
+        isAdmin()
       );
       allow delete: if isAuthenticated() && (
         resource.data.authorId == request.auth.uid ||
-        request.auth.token.admin == true
+        isAdmin()
       );
     }
   }

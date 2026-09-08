@@ -38,6 +38,17 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  const url = new URL(event.request.url);
+
+  // Security & Real-time: Never cache API endpoints, downloads, or websocket paths
+  if (
+    url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/downloads/') ||
+    url.pathname.startsWith('/ws')
+  ) {
+    return;
+  }
+
   // Network-first strategy for dynamic resources and index, falling back to cache
   event.respondWith(
     fetch(event.request)
