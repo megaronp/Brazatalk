@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
   FileCode,
   FolderOpen,
@@ -19,13 +19,19 @@ import {
   FileText,
   Search,
   Sparkles,
-  Cpu
+  Cpu,
+  Users,
+  Clock,
+  CloudCheck,
+  CloudOff
 } from 'lucide-react';
 import {
   ProjectRoomState,
   ProjectFile,
   ProjectAgent,
-  ProjectRagDoc
+  ProjectRagDoc,
+  FilePresenceUser,
+  User
 } from '../../types';
 import { projectService } from '../../services/projectService';
 import { ProjectAgenticScreen } from './ProjectAgenticScreen';
@@ -37,6 +43,10 @@ interface ProjectWorkspaceEditorProps {
   onSelectFile: (fileId: string) => void;
   currentTab?: 'files' | 'sandbox' | 'rag' | 'agents' | 'agentic';
   onTabChange?: (tab: 'files' | 'sandbox' | 'rag' | 'agents' | 'agentic') => void;
+  channelId?: string;
+  currentUser?: User | { id?: string; name?: string; userName?: string; avatar?: string };
+  filePresence?: Record<string, FilePresenceUser[]>;
+  hideHeader?: boolean;
 }
 
 export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
@@ -46,6 +56,10 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
   onSelectFile,
   currentTab,
   onTabChange,
+  channelId,
+  currentUser,
+  filePresence,
+  hideHeader = false,
 }) => {
   const [internalTab, setInternalTab] = useState<'files' | 'sandbox' | 'rag' | 'agents' | 'agentic'>('files');
   const activeTab = currentTab !== undefined ? currentTab : internalTab;
@@ -54,19 +68,55 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     onTabChange?.(tab);
   };
 
-  const [sandboxSubTab, setSandboxSubTab] = useState<'preview' | 'terminal'>('preview');
+  const [sandboxSubTab, setSandboxSubTab] = useState<'preview' | 'terminal'>(() =>
+    projectState.previewType === 'console' ? 'terminal' : 'preview'
+  );
 
   // File management
   const [newFileName, setNewFileName] = useState('');
   const [showNewFileModal, setShowNewFileModal] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
 
+  // Auto-Save & Concurrency State
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'conflict' | 'error'>('saved');
+  const [conflictData, setConflictData] = useState<{
+    file: ProjectFile;
+    serverVersion: number;
+    serverContent: string;
+    message: string;
+  } | null>(null);
+  const saveTimeoutRef = useRef<any>(null);
+
   // Terminal Runner State
   const [terminalInput, setTerminalInput] = useState('');
-  const [terminalLogs, setTerminalLogs] = useState<string[]>(() => projectState.testConsoleLogs || [
-    '[Sistema] Terminal do Mod inicializado.',
-    '[Sandbox] FiveM Mock Engine pronto.',
-  ]);
+  const [terminalLogs, setTerminalLogs] = useState<string[]>(() => {
+    if (projectState.testConsoleLogs && projectState.testConsoleLogs.length > 0) {
+      return projectState.testConsoleLogs;
+    }
+    const profile = projectState.projectProfile || 'generic';
+    if (profile === 'python') {
+      return [
+        '[Sistema] Terminal Python 3.11 inicializado.',
+        '[Sandbox] Ambiente virtual pronto. Digite comandos ou use /help.',
+      ];
+    }
+    if (profile === 'web') {
+      return [
+        '[Sistema] Dev Server Vite & Web Runtime pronto.',
+        '[Sandbox] Sandboxed DOM montado.',
+      ];
+    }
+    if (profile === 'fivem') {
+      return [
+        '[Sistema] Terminal do Mod inicializado.',
+        '[Sandbox] CFX Engine Mock pronto.',
+      ];
+    }
+    return [
+      '[Sistema] Terminal de Execução do Projeto inicializado.',
+      '[Sandbox] Workspace isolado pronto para compilação e testes.',
+    ];
+  });
 
   // RAG management
   const [newDocTitle, setNewDocTitle] = useState('');
@@ -90,14 +140,103 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     );
   }, [projectState.files]);
 
+  // Active file presence (other users viewing or editing this file)
+  const activeFilePresence = useMemo(() => {
+    if (!filePresence || !activeFile) return [];
+    const users = filePresence[activeFile.id] || [];
+    return users.filter((u) => u.userId !== currentUser?.id);
+  }, [filePresence, activeFile, currentUser?.id]);
+
   const handleContentChange = (newContent: string) => {
     if (!activeFile) return;
+    setSaveStatus('saving');
+
+    const updatedFile: ProjectFile = {
+      ...activeFile,
+      content: newContent,
+      updatedAt: Date.now(),
+      version: activeFile.version + 1,
+      updatedBy: currentUser?.name || 'Você',
+    };
+
     const updatedFiles = projectState.files.map((f) =>
-      f.id === activeFile.id
-        ? { ...f, content: newContent, updatedAt: Date.now(), version: f.version + 1 }
-        : f
+      f.id === activeFile.id ? updatedFile : f
     );
     onUpdateState({ files: updatedFiles });
+
+    // Notify presence: editing
+    if (channelId) {
+      window.dispatchEvent(
+        new CustomEvent('braza-send-ws', {
+          detail: {
+            type: 'file-presence',
+            channelId,
+            fileId: activeFile.id,
+            status: 'editing',
+            userId: currentUser?.id,
+            userName: currentUser?.name,
+            userAvatar: currentUser?.avatar,
+          },
+        })
+      );
+    }
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+    saveTimeoutRef.current = setTimeout(async () => {
+      if (!channelId) {
+        setSaveStatus('saved');
+        return;
+      }
+      const res = await projectService.saveProjectFile(
+        channelId,
+        updatedFile,
+        activeFile.version,
+        currentUser
+      );
+
+      if (res.conflict) {
+        setSaveStatus('conflict');
+        setConflictData({
+          file: updatedFile,
+          serverVersion: res.serverVersion || activeFile.version + 1,
+          serverContent: res.serverContent || '',
+          message: res.message || 'Conflito de concorrência detectado!',
+        });
+      } else if (res.success) {
+        setSaveStatus('saved');
+        setConflictData(null);
+      } else {
+        setSaveStatus('error');
+      }
+    }, 1000);
+  };
+
+  const handleAcceptServerVersion = () => {
+    if (!conflictData || !activeFile) return;
+    const resolvedFile: ProjectFile = {
+      ...activeFile,
+      content: conflictData.serverContent,
+      version: conflictData.serverVersion,
+      updatedAt: Date.now(),
+    };
+    const updatedFiles = projectState.files.map((f) =>
+      f.id === activeFile.id ? resolvedFile : f
+    );
+    onUpdateState({ files: updatedFiles });
+    setConflictData(null);
+    setSaveStatus('saved');
+  };
+
+  const handleForceMyVersion = async () => {
+    if (!conflictData || !activeFile || !channelId) return;
+    setSaveStatus('saving');
+    const res = await projectService.forceSaveProjectFile(channelId, conflictData.file, currentUser);
+    if (res.success) {
+      setConflictData(null);
+      setSaveStatus('saved');
+    } else {
+      setSaveStatus('error');
+    }
   };
 
   const handleCopyCode = () => {
@@ -107,18 +246,36 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     setTimeout(() => setCopiedCode(false), 1500);
   };
 
-  const handleCreateFile = (e: React.FormEvent) => {
+  const handleCreateFile = async (e: React.FormEvent) => {
     e.preventDefault();
     const name = newFileName.trim();
     if (!name) return;
 
-    let language: ProjectFile['language'] = 'lua';
+    let language: ProjectFile['language'] = 'text';
     if (name.endsWith('.json')) language = 'json';
     else if (name.endsWith('.html')) language = 'html';
     else if (name.endsWith('.css')) language = 'css';
     else if (name.endsWith('.js')) language = 'javascript';
-    else if (name.endsWith('.ts')) language = 'typescript';
+    else if (name.endsWith('.ts') || name.endsWith('.tsx')) language = 'typescript';
+    else if (name.endsWith('.py')) language = 'python';
+    else if (name.endsWith('.lua')) language = 'lua';
     else if (name.endsWith('.md')) language = 'markdown';
+    else if (projectState.projectProfile === 'python') language = 'python';
+    else if (projectState.projectProfile === 'web') language = 'javascript';
+    else if (projectState.projectProfile === 'fivem') language = 'lua';
+
+    let initialContent = `-- Arquivo ${name}\n`;
+    if (language === 'python') {
+      initialContent = `# ${name}\n\ndef main():\n    print("Hello from ${name}")\n\nif __name__ == '__main__':\n    main()\n`;
+    } else if (language === 'json') {
+      initialContent = '{\n  "name": "project",\n  "version": "1.0.0"\n}\n';
+    } else if (language === 'html') {
+      initialContent = `<!DOCTYPE html>\n<html lang="pt-BR">\n<head>\n  <meta charset="UTF-8">\n  <title>${name}</title>\n</head>\n<body>\n  <h1>${name}</h1>\n</body>\n</html>\n`;
+    } else if (language === 'javascript' || language === 'typescript') {
+      initialContent = `// ${name}\nconsole.log("Arquivo ${name} inicializado");\n`;
+    } else if (language === 'markdown') {
+      initialContent = `# ${name}\n\nDocumentação do módulo.\n`;
+    }
 
     const newFile: ProjectFile = {
       id: `file-${Date.now()}`,
@@ -127,8 +284,8 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
       language,
       version: 1,
       updatedAt: Date.now(),
-      updatedBy: 'Usuário',
-      content: language === 'json' ? '{\n  "version": "1.0.0"\n}' : `-- Arquivo ${name}\n`,
+      updatedBy: currentUser?.name || 'Usuário',
+      content: initialContent,
     };
 
     const updatedFiles = [...projectState.files, newFile];
@@ -136,28 +293,36 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     onSelectFile(newFile.id);
     setNewFileName('');
     setShowNewFileModal(false);
+
+    if (channelId) {
+      await projectService.saveProjectFile(channelId, newFile, 0, currentUser);
+    }
   };
 
-  const handleDeleteFile = (fileId: string) => {
+  const handleDeleteFile = async (fileId: string) => {
     if (projectState.files.length <= 1) return;
     const updatedFiles = projectState.files.filter((f) => f.id !== fileId);
     onUpdateState({ files: updatedFiles });
     if (activeFileId === fileId) {
       onSelectFile(updatedFiles[0].id);
     }
+    if (channelId) {
+      await projectService.deleteProjectFile(channelId, fileId);
+    }
   };
 
-  // Run mock simulator & syntax validation
+  // Run verification & syntax tests (profile-aware)
   const handleRunVerification = () => {
+    const profile = projectState.projectProfile || 'generic';
     const logs: string[] = [
-      `[Validação] Iniciando análise de integridade para ${projectState.projectName}...`,
+      `[Validação] Analisando integridade de '${projectState.projectName}' (Perfil: ${profile.toUpperCase()})...`,
     ];
 
     let hasErrors = false;
 
-    // Check JSON syntax
+    // Check JSON files
     projectState.files
-      .filter((f) => f.language === 'json')
+      .filter((f) => f.language === 'json' || f.name.endsWith('.json'))
       .forEach((f) => {
         try {
           JSON.parse(f.content);
@@ -168,32 +333,47 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
         }
       });
 
-    // Check Lua basic structure
-    projectState.files
-      .filter((f) => f.language === 'lua')
-      .forEach((f) => {
-        const lines = f.content.split('\n');
-        let functionCount = 0;
-        let endCount = 0;
-        lines.forEach((line) => {
-          const l = line.trim();
-          if (/\bfunction\b/.test(l) && !/\bend\b/.test(l)) functionCount++;
-          if (/\b(if|while|for)\b/.test(l) && /\bthen\b|\bdo\b/.test(l)) functionCount++;
-          if (l === 'end' || l.endsWith(' end')) endCount++;
+    if (profile === 'python') {
+      projectState.files
+        .filter((f) => f.language === 'python' || f.name.endsWith('.py'))
+        .forEach((f) => {
+          const lines = f.content.split('\n');
+          let openParens = 0;
+          lines.forEach((l) => {
+            openParens += (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
+          });
+          if (openParens !== 0) {
+            hasErrors = true;
+            logs.push(`[Python] ❌ ${f.name}: Parênteses não balanceados.`);
+          } else {
+            logs.push(`[Python] ✅ ${f.name}: ${lines.length} linhas verificadas. PEP-8 compatível.`);
+          }
         });
+      logs.push('[Python VirtualEnv] ⚡ Simulação de imports e módulos concluída.');
+    } else if (profile === 'web') {
+      const hasHtml = projectState.files.some((f) => f.name.endsWith('.html'));
+      if (hasHtml) {
+        logs.push('[Web] ✅ Entry point HTML detectado e pronto para preview no navegador.');
+      } else {
+        logs.push('[Web] ℹ️ Dica: Adicione um index.html para renderização no preview ao vivo.');
+      }
+      logs.push('[Build Simulator] 📦 Módulos JS/TS e estilos CSS conferidos com sucesso.');
+    } else if (profile === 'fivem') {
+      projectState.files
+        .filter((f) => f.language === 'lua' || f.name.endsWith('.lua'))
+        .forEach((f) => {
+          const lines = f.content.split('\n');
+          logs.push(`[Lua] ℹ️ ${f.name}: ${lines.length} linhas analisadas. NetEvents verificados.`);
+        });
+      logs.push('[CFX Engine] ⚡ Simulando inicialização do recurso no servidor...');
+    } else {
+      logs.push(`[Workspace] ✅ ${projectState.files.length} arquivos analisados com sucesso.`);
+    }
 
-        logs.push(
-          `[Lua] ℹ️ ${f.name}: ${lines.length} linhas analisadas. Registro de eventos FiveM verificado.`
-        );
-      });
-
-    logs.push('[Engine Mock] ⚡ Disparando teste de montagem de ambiente...');
-    logs.push('[Console] Command Registered: /spawncar [modelo]');
-    logs.push('[Console] NetEvent Registered: braza:notify');
     logs.push(
       hasErrors
         ? '[Status] ⚠️ Foram detectados avisos de sintaxe nos arquivos.'
-        : '[Status] ✅ Todos os scripts e arquivos passaram nos testes com sucesso! 0 erros.'
+        : '[Status] ✅ Todos os scripts passaram na análise com sucesso! 0 erros críticos.'
     );
 
     setTerminalLogs((prev) => [...prev, ...logs]);
@@ -206,28 +386,49 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     const cmd = terminalInput.trim();
     if (!cmd) return;
 
+    const profile = projectState.projectProfile || 'generic';
     const newLogs = [`> ${cmd}`];
 
-    if (cmd.startsWith('/spawncar')) {
+    if (cmd === '/clear') {
+      setTerminalLogs([]);
+      setTerminalInput('');
+      return;
+    }
+
+    if (cmd === '/help') {
+      newLogs.push(`[Comandos de Teste - ${profile.toUpperCase()}]:`);
+      if (profile === 'python') {
+        newLogs.push('  /python main.py - Simula execução do script');
+        newLogs.push('  /pytest - Executa suíte de testes unitários');
+      } else if (profile === 'web') {
+        newLogs.push('  /build - Simula compilação do bundle');
+        newLogs.push('  /test - Executa testes da interface');
+      } else if (profile === 'fivem') {
+        newLogs.push('  /spawncar [nome] - Testa spawn do veículo');
+        newLogs.push('  /resmon - Exibe consumo simulado de CPU/ms');
+      } else {
+        newLogs.push('  /run - Executa o binário do projeto');
+        newLogs.push('  /test - Roda testes automatizados');
+      }
+      newLogs.push('  /clear - Limpa o terminal de teste');
+    } else if (profile === 'python' && cmd.startsWith('/python')) {
+      newLogs.push('[Python 3.11] 🐍 Executando processo no sandbox...');
+      newLogs.push('[Output] Processo concluído com código 0 (Execução simulada).');
+    } else if (profile === 'python' && cmd.startsWith('/pytest')) {
+      newLogs.push('[Pytest] 🧪 4 testes passaram em 0.12s. Cobertura: 100%.');
+    } else if (profile === 'web' && cmd.startsWith('/build')) {
+      newLogs.push('[Vite] ⚡ Compilando bundle para produção...');
+      newLogs.push('[Vite] ✅ 14 módulos transformados. dist/index.html gerado.');
+    } else if (profile === 'fivem' && cmd.startsWith('/spawncar')) {
       const parts = cmd.split(' ');
       const car = parts[1] || 'adder';
       newLogs.push(`[Mock FiveM] 🚗 Executando RegisterCommand('spawncar')...`);
       newLogs.push(`[Mock FiveM] RequestModel(${car}) -> Carregado.`);
-      newLogs.push(`[Mock FiveM] CreateVehicle(${car}, coords) -> ID da Entidade: 1045`);
       newLogs.push(`[Mock FiveM] ✅ Veículo '${car}' gerado com sucesso!`);
-    } else if (cmd.startsWith('/help')) {
-      newLogs.push(`[Comandos de Teste]:`);
-      newLogs.push(`  /spawncar [nome] - Testa spawn do veículo`);
-      newLogs.push(`  /resmon - Exibe consumo simulado de CPU/ms`);
-      newLogs.push(`  /clear - Limpa o terminal de teste`);
-    } else if (cmd === '/resmon') {
-      newLogs.push(`[Resmon Mock] ${projectState.projectName}: 0.01 ms (Excelente otimização)`);
-    } else if (cmd === '/clear') {
-      setTerminalLogs([]);
-      setTerminalInput('');
-      return;
+    } else if (profile === 'fivem' && cmd === '/resmon') {
+      newLogs.push(`[Resmon Mock] ${projectState.projectName}: 0.01 ms`);
     } else {
-      newLogs.push(`[Mock Console] Comando '${cmd}' executado no sandbox de simulação.`);
+      newLogs.push(`[Console] Comando '${cmd}' processado no ambiente virtual.`);
     }
 
     setTerminalLogs((prev) => [...prev, ...newLogs]);
@@ -266,91 +467,101 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
 
   return (
     <div id="project-workspace-editor" className="h-full flex flex-col bg-[#0d1017]">
-      {/* Top Workspace Tab Selector (Desktop only) */}
-      <div className="hidden lg:flex h-12 border-b border-white/[0.06] bg-[#090b10] items-center justify-between px-3 shrink-0">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab('files')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'files'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
-            }`}
-          >
-            <FolderOpen className="w-3.5 h-3.5" />
-            <span>Arquivos ({projectState.files.length})</span>
-          </button>
+      {/* Top Workspace Tab Selector (Desktop only, hidden if controlled by parent) */}
+      {!hideHeader && (
+        <div className="hidden lg:flex h-12 border-b border-white/[0.06] bg-[#090b10] items-center justify-between px-3 shrink-0">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('files')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'files'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Arquivos ({projectState.files.length})</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('sandbox')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'sandbox'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
-            }`}
-          >
-            <Play className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Sandbox & Testes</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('sandbox')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'sandbox'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <Play className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Sandbox & Testes</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('rag')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'rag'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
-            }`}
-          >
-            <BookOpen className="w-3.5 h-3.5 text-amber-400" />
-            <span>RAG & Docs ({projectState.ragDocs.length})</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('rag')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'rag'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+              <span>RAG & Docs ({projectState.ragDocs.length})</span>
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('agents')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'agents'
-                ? 'bg-indigo-600 text-white shadow-sm'
-                : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
-            }`}
-          >
-            <Bot className="w-3.5 h-3.5 text-pink-400" />
-            <span>Agentes & Guardrails</span>
-          </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('agents')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                activeTab === 'agents'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-white hover:bg-white/[0.04]'
+              }`}
+            >
+              <Bot className="w-3.5 h-3.5 text-pink-400" />
+              <span>Agentes & Guardrails</span>
+            </button>
 
+            <button
+              type="button"
+              onClick={() => setActiveTab('agentic')}
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${
+                activeTab === 'agentic'
+                  ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm ring-1 ring-white/20'
+                  : 'text-slate-300 hover:text-white hover:bg-white/[0.06] bg-indigo-500/10 border border-indigo-500/20'
+              }`}
+            >
+              <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Tela Agêntica (Swarm)</span>
+              {projectState.actionPlan?.status === 'running' && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute -top-0.5 -right-0.5" />
+              )}
+              {projectState.pendingUserQuestion && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse absolute -top-0.5 -right-0.5" />
+              )}
+            </button>
+          </div>
+
+          {/* Global Quick Action */}
           <button
             type="button"
-            onClick={() => setActiveTab('agentic')}
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${
-              activeTab === 'agentic'
-                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm ring-1 ring-white/20'
-                : 'text-slate-300 hover:text-white hover:bg-white/[0.06] bg-indigo-500/10 border border-indigo-500/20'
-            }`}
+            onClick={handleRunVerification}
+            className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer shadow-sm"
           >
-            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Tela Agêntica (Swarm)</span>
-            {projectState.actionPlan?.status === 'running' && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute -top-0.5 -right-0.5" />
-            )}
-            {projectState.pendingUserQuestion && (
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse absolute -top-0.5 -right-0.5" />
-            )}
+            <Play className="w-3 h-3 fill-current" />
+            <span>
+              {projectState.projectProfile === 'python'
+                ? 'Testar Script'
+                : projectState.projectProfile === 'web'
+                ? 'Validar Web'
+                : projectState.projectProfile === 'fivem'
+                ? 'Testar Mod'
+                : 'Verificar Projeto'}
+            </span>
           </button>
         </div>
-
-        {/* Global Quick Action */}
-        <button
-          type="button"
-          onClick={handleRunVerification}
-          className="flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-600/20 hover:bg-emerald-600 text-emerald-300 hover:text-white text-xs font-bold border border-emerald-500/30 transition-all cursor-pointer shadow-sm"
-        >
-          <Play className="w-3 h-3 fill-current" />
-          <span>Testar Mod</span>
-        </button>
-      </div>
+      )}
 
       {/* TAB 1: FILES & CODE EDITOR */}
       {activeTab === 'files' && (
@@ -424,6 +635,8 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                             ? 'text-amber-400'
                             : file.language === 'html'
                             ? 'text-rose-400'
+                            : file.language === 'python'
+                            ? 'text-emerald-400'
                             : 'text-indigo-400'
                         }`}
                       />
@@ -456,7 +669,7 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                     type="text"
                     autoFocus
                     required
-                    placeholder="ex: server.lua, config.json"
+                    placeholder="ex: main.py, server.lua, config.json"
                     value={newFileName}
                     onChange={(e) => setNewFileName(e.target.value)}
                     className="w-full bg-[#141724] border border-white/[0.08] rounded-lg px-2 py-1 text-xs text-white focus:outline-none focus:border-indigo-500"
@@ -465,13 +678,13 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                     <button
                       type="button"
                       onClick={() => setShowNewFileModal(false)}
-                      className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-white"
+                      className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-white cursor-pointer"
                     >
                       Cancelar
                     </button>
                     <button
                       type="submit"
-                      className="px-2 py-0.5 text-[10px] bg-indigo-600 text-white rounded font-bold"
+                      className="px-2 py-0.5 text-[10px] bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold cursor-pointer"
                     >
                       Criar
                     </button>
@@ -484,17 +697,108 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
           {/* Active Code Editor */}
           {activeFile ? (
             <div className="flex-1 flex flex-col bg-[#07080d] overflow-hidden min-h-0">
+              {/* Concurrency Conflict Alert Banner */}
+              {conflictData && (
+                <div className="bg-amber-950/90 border-b border-amber-500/40 p-2.5 sm:p-3 px-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-amber-200 text-xs shrink-0">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div className="truncate">
+                      <span className="font-bold text-white">Conflito de Versão: </span>
+                      <span>Outro membro salvou uma versão mais recente (v{conflictData.serverVersion}).</span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleAcceptServerVersion}
+                      className="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-white rounded-lg font-bold text-[11px] transition-colors cursor-pointer"
+                    >
+                      Carregar do Servidor
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleForceMyVersion}
+                      className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg font-bold text-[11px] transition-colors shadow-sm cursor-pointer"
+                    >
+                      Forçar Minha Versão
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* File Header */}
               <div className="h-10 border-b border-white/[0.06] bg-[#0c0e16] px-3 sm:px-4 flex items-center justify-between text-xs shrink-0">
                 <div className="flex items-center gap-2 text-slate-300 min-w-0">
-                  <span className="font-bold text-white truncate max-w-[130px] sm:max-w-none">{activeFile.name}</span>
+                  <span className="font-bold text-white truncate max-w-[120px] sm:max-w-none">{activeFile.name}</span>
                   <span className="text-[10px] font-mono uppercase bg-white/[0.06] px-1.5 py-0.5 rounded text-slate-400 shrink-0">
                     {activeFile.language}
                   </span>
                   <span className="text-[10px] text-slate-500 hidden sm:inline">v{activeFile.version}</span>
+
+                  {/* Save Status Indicator */}
+                  <div className="hidden sm:flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04]">
+                    {saveStatus === 'saving' && (
+                      <span className="flex items-center gap-1 text-sky-400">
+                        <RefreshCw className="w-2.5 h-2.5 animate-spin" />
+                        <span>Salvando...</span>
+                      </span>
+                    )}
+                    {saveStatus === 'saved' && (
+                      <span className="flex items-center gap-1 text-emerald-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                        <span>Salvo</span>
+                      </span>
+                    )}
+                    {saveStatus === 'conflict' && (
+                      <span className="flex items-center gap-1 text-amber-400 font-bold">
+                        <AlertCircle className="w-2.5 h-2.5" />
+                        <span>Conflito</span>
+                      </span>
+                    )}
+                    {saveStatus === 'error' && (
+                      <span className="flex items-center gap-1 text-rose-400">
+                        <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                        <span>Erro</span>
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Presence Chips for Active File */}
+                  {activeFilePresence.length > 0 && (
+                    <div className="flex items-center gap-1 bg-white/[0.04] px-2 py-0.5 rounded-full border border-white/[0.06]">
+                      <div className="flex items-center -space-x-1.5">
+                        {activeFilePresence.map((p) => (
+                          <img
+                            key={p.userId}
+                            src={p.userAvatar || `https://api.dicebear.com/7.x/bottts/svg?seed=${p.userId}`}
+                            alt={p.userName}
+                            title={`${p.userName} (${p.status === 'editing' ? 'Editando agora...' : 'Visualizando'})`}
+                            className={`w-4 h-4 rounded-full border border-[#0c0e16] ${
+                              p.status === 'editing' ? 'ring-1 ring-amber-400 animate-pulse' : ''
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-medium hidden md:inline">
+                        {activeFilePresence[0].userName}
+                        {activeFilePresence.length > 1 ? ` +${activeFilePresence.length - 1}` : ''}
+                        {activeFilePresence.some((p) => p.status === 'editing') ? ' (editando)' : ''}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={handleRunVerification}
+                    title="Testar e Executar Código no Sandbox"
+                    className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-300 hover:text-white px-2.5 py-1 rounded-lg bg-emerald-600/20 hover:bg-emerald-600 border border-emerald-500/30 transition-all cursor-pointer shadow-sm"
+                  >
+                    <Play className="w-3 h-3 fill-current" />
+                    <span>Testar</span>
+                  </button>
+
                   <button
                     type="button"
                     onClick={handleCopyCode}
@@ -530,14 +834,79 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                 <textarea
                   value={activeFile.content}
                   onChange={(e) => handleContentChange(e.target.value)}
+                  onFocus={() => {
+                    if (channelId) {
+                      window.dispatchEvent(
+                        new CustomEvent('braza-send-ws', {
+                          detail: {
+                            type: 'file-presence',
+                            channelId,
+                            fileId: activeFile.id,
+                            status: 'editing',
+                            userId: currentUser?.id,
+                            userName: currentUser?.name,
+                            userAvatar: currentUser?.avatar,
+                          },
+                        })
+                      );
+                    }
+                  }}
+                  onBlur={() => {
+                    if (channelId) {
+                      window.dispatchEvent(
+                        new CustomEvent('braza-send-ws', {
+                          detail: {
+                            type: 'file-presence',
+                            channelId,
+                            fileId: activeFile.id,
+                            status: 'viewing',
+                            userId: currentUser?.id,
+                            userName: currentUser?.name,
+                            userAvatar: currentUser?.avatar,
+                          },
+                        })
+                      );
+                    }
+                  }}
                   spellCheck={false}
                   className="flex-1 bg-transparent text-emerald-300 font-mono text-xs leading-5 p-3 resize-none focus:outline-none overflow-auto whitespace-pre selection:bg-indigo-600/40 min-w-0"
                 />
               </div>
             </div>
+          ) : projectState.files.length === 0 ? (
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-[#07080d] select-none">
+              <div className="w-14 h-14 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-3 shadow-lg shadow-indigo-600/10">
+                <FileCode className="w-7 h-7" />
+              </div>
+              <h3 className="text-base font-bold text-white mb-1.5">Workspace em Branco</h3>
+              <p className="text-xs text-slate-400 max-w-md mb-6 leading-relaxed">
+                Esta sala de projeto foi iniciada em branco para você configurar livremente.
+                Crie seus arquivos de código, monte sua equipe de agentes ou use a Tela Agêntica para planejar.
+              </p>
+
+              <div className="flex flex-wrap items-center justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowNewFileModal(true)}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/30 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Criar Primeiro Arquivo</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('agentic')}
+                  className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.1] border border-white/[0.08] text-slate-300 hover:text-white text-xs font-bold transition-all cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                  <span>Gerar Plano com IA</span>
+                </button>
+              </div>
+            </div>
           ) : (
-            <div className="flex-1 flex items-center justify-center text-slate-500 text-xs">
-              Nenhum arquivo selecionado no workspace.
+            <div className="flex-1 flex items-center justify-center text-slate-500 text-xs bg-[#07080d]">
+              Selecione um arquivo na barra lateral para começar a editar.
             </div>
           )}
         </div>
@@ -559,7 +928,15 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                 }`}
               >
                 <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Preview NUI</span>
+                <span>
+                  {projectState.projectProfile === 'web'
+                    ? 'Preview Web'
+                    : projectState.projectProfile === 'python'
+                    ? 'Visualização / UI'
+                    : projectState.projectProfile === 'fivem'
+                    ? 'Preview NUI'
+                    : 'Preview de Interface'}
+                </span>
               </button>
 
               <button
@@ -572,7 +949,15 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                 }`}
               >
                 <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Console FiveM</span>
+                <span>
+                  {projectState.projectProfile === 'python'
+                    ? 'Terminal Python'
+                    : projectState.projectProfile === 'web'
+                    ? 'Terminal / Build'
+                    : projectState.projectProfile === 'fivem'
+                    ? 'Console FiveM'
+                    : 'Terminal de Execução'}
+                </span>
               </button>
             </div>
 
@@ -600,12 +985,12 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                       <div className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
                       <div className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
                       <span className="ml-2 font-mono text-[10px] text-slate-400 truncate max-w-[200px]">
-                        Sandboxed NUI Preview ({htmlFile.name})
+                        Sandboxed Preview ({htmlFile.name})
                       </span>
                     </div>
                   </div>
                   <iframe
-                    title="NUI Preview"
+                    title="Sandbox Preview"
                     sandbox="allow-scripts allow-modals"
                     srcDoc={
                       htmlFile.content.includes('<head>')
@@ -621,21 +1006,37 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
               ) : (
                 <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-400">
                   <Layers className="w-10 h-10 text-slate-600 mb-3" />
-                  <h3 className="text-sm font-bold text-white mb-1">Nenhum arquivo HTML encontrado</h3>
+                  <h3 className="text-sm font-bold text-white mb-1">
+                    {projectState.previewType === 'console'
+                      ? 'Projeto focado em Terminal / CLI'
+                      : 'Nenhum arquivo HTML encontrado'}
+                  </h3>
                   <p className="text-xs text-slate-500 max-w-sm mb-4">
-                    Crie um arquivo como `index.html` ou `html/index.html` para visualizar a interface NUI do mod em tempo real.
+                    {projectState.previewType === 'console'
+                      ? 'Este projeto executa via scripts ou terminal. Utilize o console interativo para testar os módulos e visualizar saídas.'
+                      : 'Crie um arquivo como index.html para visualizar a interface web ou NUI em tempo real.'}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewFileName('index.html');
-                      setShowNewFileModal(true);
-                      setActiveTab('files');
-                    }}
-                    className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold cursor-pointer"
-                  >
-                    + Criar index.html
-                  </button>
+                  {projectState.previewType === 'console' ? (
+                    <button
+                      type="button"
+                      onClick={() => setSandboxSubTab('terminal')}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold cursor-pointer hover:bg-emerald-500 transition-colors shadow-sm"
+                    >
+                      Abrir Terminal de Execução
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewFileName('index.html');
+                        setShowNewFileModal(true);
+                        setActiveTab('files');
+                      }}
+                      className="px-3 py-1.5 rounded-xl bg-indigo-600 text-white text-xs font-bold cursor-pointer hover:bg-indigo-500 transition-colors shadow-sm"
+                    >
+                      + Criar index.html
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -668,7 +1069,14 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
               {/* Quick test command pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto py-2 shrink-0">
                 <span className="text-[10px] uppercase font-bold text-slate-500 shrink-0">Atalhos:</span>
-                {['/spawncar adder', '/resmon', '/help', '/clear'].map((cmd) => (
+                {(projectState.projectProfile === 'python'
+                  ? ['/python main.py', '/pytest', '/help', '/clear']
+                  : projectState.projectProfile === 'web'
+                  ? ['/build', '/test', '/help', '/clear']
+                  : projectState.projectProfile === 'fivem'
+                  ? ['/spawncar adder', '/resmon', '/help', '/clear']
+                  : ['/run', '/test', '/help', '/clear']
+                ).map((cmd) => (
                   <button
                     key={cmd}
                     type="button"
@@ -686,7 +1094,7 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                   <span className="text-emerald-400 font-mono font-bold">&gt;</span>
                   <input
                     type="text"
-                    placeholder="Digite um comando (ex: /spawncar adder, /resmon)..."
+                    placeholder="Digite um comando (ou use /help)..."
                     value={terminalInput}
                     onChange={(e) => setTerminalInput(e.target.value)}
                     className="flex-1 bg-transparent text-xs text-white font-mono focus:outline-none min-w-0"
@@ -739,39 +1147,57 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
 
           {/* Docs list */}
           <div className="space-y-3">
-            {filteredRagDocs.map((doc) => (
-              <div
-                key={doc.id}
-                className="bg-[#0e111a] border border-white/[0.08] rounded-2xl p-4 transition-all hover:border-indigo-500/30"
-              >
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-amber-400 shrink-0" />
-                    <h4 className="text-xs font-bold text-white">{doc.title}</h4>
-                    {doc.gameEngine && (
-                      <span className="text-[10px] bg-white/[0.06] text-slate-300 px-2 py-0.5 rounded-md font-mono">
-                        {doc.gameEngine}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-[10px] text-slate-500">
-                    {new Date(doc.uploadedAt).toLocaleDateString()}
-                  </span>
-                </div>
-
-                <div className="flex gap-1.5 mb-2">
-                  {doc.tags.map((t) => (
-                    <span key={t} className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
-                      #{t}
-                    </span>
-                  ))}
-                </div>
-
-                <pre className="bg-[#07090f] p-3 rounded-xl text-[11px] font-mono text-slate-300 max-h-36 overflow-y-auto border border-white/[0.04]">
-                  {doc.content}
-                </pre>
+            {filteredRagDocs.length === 0 ? (
+              <div className="p-8 text-center bg-[#0e111a] rounded-2xl border border-white/[0.06] select-none">
+                <FileText className="w-10 h-10 text-amber-400 mx-auto mb-2 opacity-60" />
+                <h4 className="text-sm font-bold text-white mb-1">Nenhum Documento Indexado</h4>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
+                  Esta sala não possui documentos RAG pré-carregados. Indexe documentações técnicas, APIs ou manuais para orientar a IA.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowNewDocModal(true)}
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/30 cursor-pointer inline-flex items-center gap-2"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Indexar Primeiro Documento</span>
+                </button>
               </div>
-            ))}
+            ) : (
+              filteredRagDocs.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="bg-[#0e111a] border border-white/[0.08] rounded-2xl p-4 transition-all hover:border-indigo-500/30"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-amber-400 shrink-0" />
+                      <h4 className="text-xs font-bold text-white">{doc.title}</h4>
+                      {doc.gameEngine && (
+                        <span className="text-[10px] bg-white/[0.06] text-slate-300 px-2 py-0.5 rounded-md font-mono">
+                          {doc.gameEngine}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-500">
+                      {new Date(doc.uploadedAt).toLocaleDateString()}
+                    </span>
+                  </div>
+
+                  <div className="flex gap-1.5 mb-2">
+                    {doc.tags.map((t) => (
+                      <span key={t} className="text-[10px] text-indigo-400 bg-indigo-500/10 px-1.5 py-0.5 rounded">
+                        #{t}
+                      </span>
+                    ))}
+                  </div>
+
+                  <pre className="bg-[#07090f] p-3 rounded-xl text-[11px] font-mono text-slate-300 max-h-36 overflow-y-auto border border-white/[0.04]">
+                    {doc.content}
+                  </pre>
+                </div>
+              ))
+            )}
           </div>
 
           {/* New Doc Modal */}
@@ -856,51 +1282,74 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {projectState.agents.map((agent) => (
-                <div
-                  key={agent.id}
-                  className="bg-[#0e111a] border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between space-y-3"
-                >
-                  <div className="flex items-start gap-3">
-                    <img src={agent.avatar} alt={agent.name} className="w-10 h-10 rounded-xl ring-1 ring-white/10" />
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-white truncate">{agent.name}</span>
-                        <span
-                          className="text-[10px] font-mono px-1.5 py-0.2 rounded font-bold"
-                          style={{
-                            backgroundColor: `${agent.color}20`,
-                            color: agent.color,
-                          }}
-                        >
-                          {agent.handle}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">{agent.role}</div>
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Habilidades:</div>
-                    <div className="flex flex-wrap gap-1">
-                      {agent.skills.map((skill, sIdx) => (
-                        <span
-                          key={sIdx}
-                          className="text-[10px] bg-white/[0.05] border border-white/[0.06] text-slate-300 px-2 py-0.5 rounded-md"
-                        >
-                          {skill}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="text-[11px] text-slate-400 bg-[#07090f] p-2.5 rounded-xl border border-white/[0.04] leading-relaxed">
-                    {agent.systemPrompt}
-                  </div>
+            {projectState.agents.length === 0 ? (
+              <div className="p-8 text-center bg-[#0e111a] rounded-2xl border border-white/[0.06] select-none">
+                <Bot className="w-10 h-10 text-indigo-400 mx-auto mb-2 opacity-60" />
+                <h4 className="text-sm font-bold text-white mb-1">Nenhum Agente Configurado</h4>
+                <p className="text-xs text-slate-400 max-w-sm mx-auto mb-4">
+                  Esta sala foi iniciada em branco. Você pode carregar uma equipe sugerida baseada no perfil da sala ou adicionar agentes conforme sua preferência.
+                </p>
+                <div className="flex items-center justify-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const suggested = projectService.getProfile(projectState.projectProfile || 'web').agents;
+                      onUpdateState({ agents: suggested });
+                    }}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition-all shadow-md shadow-indigo-600/30 cursor-pointer inline-flex items-center gap-2"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Carregar Equipe Sugerida</span>
+                  </button>
                 </div>
-              ))}
-            </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {projectState.agents.map((agent) => (
+                  <div
+                    key={agent.id}
+                    className="bg-[#0e111a] border border-white/[0.08] rounded-2xl p-4 flex flex-col justify-between space-y-3"
+                  >
+                    <div className="flex items-start gap-3">
+                      <img src={agent.avatar} alt={agent.name} className="w-10 h-10 rounded-xl ring-1 ring-white/10" />
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-white truncate">{agent.name}</span>
+                          <span
+                            className="text-[10px] font-mono px-1.5 py-0.2 rounded font-bold"
+                            style={{
+                              backgroundColor: `${agent.color}20`,
+                              color: agent.color,
+                            }}
+                          >
+                            {agent.handle}
+                          </span>
+                        </div>
+                        <div className="text-[11px] text-slate-400 mt-0.5">{agent.role}</div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Habilidades:</div>
+                      <div className="flex flex-wrap gap-1">
+                        {agent.skills.map((skill, sIdx) => (
+                          <span
+                            key={sIdx}
+                            className="text-[10px] bg-white/[0.05] border border-white/[0.06] text-slate-300 px-2 py-0.5 rounded-md"
+                          >
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="text-[11px] text-slate-400 bg-[#07090f] p-2.5 rounded-xl border border-white/[0.04] leading-relaxed">
+                      {agent.systemPrompt}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Server, Role, Permission, SoundPack, BotConfig } from '../../types';
+import { Server, Role, Permission, SoundPack, BotConfig, Channel } from '../../types';
 import {
   Shield,
   Bot,
@@ -9,6 +9,10 @@ import {
   Plus,
   Play,
   Lock,
+  Hash,
+  Sparkles,
+  Settings,
+  FolderOpen,
 } from 'lucide-react';
 import { soundEngine } from '../../services/soundEngine';
 
@@ -16,14 +20,16 @@ interface ServerSettingsModalProps {
   server: Server;
   onClose: () => void;
   onUpdateServer: (updated: Partial<Server>) => void;
+  onManageChannel?: (channel: Channel) => void;
 }
 
 export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
   server,
   onClose,
   onUpdateServer,
+  onManageChannel,
 }) => {
-  const [activeTab, setActiveTab] = useState<'overview' | 'roles' | 'bots' | 'sounds' | 'audit'>('roles');
+  const [activeTab, setActiveTab] = useState<'overview' | 'channels' | 'roles' | 'bots' | 'sounds' | 'audit'>('channels');
 
   // Local editing state
   const [serverName, setServerName] = useState(server.name);
@@ -150,6 +156,17 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
             </button>
 
             <button
+              id="tab-btn-server-channels"
+              onClick={() => setActiveTab('channels')}
+              className={`flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                activeTab === 'channels' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
+              }`}
+            >
+              <Hash className="w-4 h-4" />
+              <span>Salas & Canais</span>
+            </button>
+
+            <button
               onClick={() => setActiveTab('roles')}
               className={`flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
                 activeTab === 'roles' ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30' : 'text-slate-400 hover:bg-white/[0.04] hover:text-white'
@@ -261,6 +278,96 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                     className="w-5 h-5 accent-emerald-500 rounded cursor-pointer"
                   />
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* 1.5. Channels & Rooms Management Tab */}
+          {activeTab === 'channels' && (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-black text-white tracking-tight">Gerenciamento de Salas & Canais</h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Altere o nome, configure permissões ou exclua salas e suas dependências.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                {server.categories.map((category) => {
+                  const categoryChannels = server.channels.filter((c) => c.categoryId === category.id);
+                  if (categoryChannels.length === 0) return null;
+
+                  return (
+                    <div key={category.id} className="p-4 bg-[#121520] rounded-2xl border border-white/[0.06] space-y-3">
+                      <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
+                        <FolderOpen className="w-3.5 h-3.5 text-indigo-400" />
+                        <span>{category.name}</span>
+                        <span className="text-[10px] text-slate-500 font-normal lowercase">
+                          ({categoryChannels.length} {categoryChannels.length === 1 ? 'sala' : 'salas'})
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2">
+                        {categoryChannels.map((channel) => (
+                          <div
+                            key={channel.id}
+                            className="p-3 bg-[#171a27] rounded-xl border border-white/[0.04] flex items-center justify-between gap-3 hover:border-white/[0.1] transition-all"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <div className="p-1.5 rounded-lg bg-white/[0.04] border border-white/[0.06] shrink-0">
+                                {channel.type === 'project' ? (
+                                  <Sparkles className="w-4 h-4 text-indigo-400" />
+                                ) : channel.type === 'voice' ? (
+                                  <Volume2 className="w-4 h-4 text-emerald-400" />
+                                ) : (
+                                  <Hash className="w-4 h-4 text-slate-400" />
+                                )}
+                              </div>
+
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-bold text-white text-xs truncate">
+                                    #{channel.name}
+                                  </span>
+                                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/[0.06] text-slate-300 font-medium">
+                                    {channel.type === 'project'
+                                      ? 'Sala IA'
+                                      : channel.type === 'voice'
+                                      ? 'Voz HD'
+                                      : 'Texto'}
+                                  </span>
+                                  {channel.isE2EE && (
+                                    <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
+                                      E2EE
+                                    </span>
+                                  )}
+                                </div>
+                                {channel.topic && (
+                                  <p className="text-[11px] text-slate-400 truncate mt-0.5">
+                                    {channel.topic}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+
+                            {onManageChannel && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onManageChannel(channel);
+                                }}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/[0.06] hover:bg-white/[0.12] text-slate-200 hover:text-white border border-white/[0.08] text-xs font-semibold transition-all cursor-pointer shrink-0"
+                              >
+                                <Settings className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Gerenciar Sala</span>
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}

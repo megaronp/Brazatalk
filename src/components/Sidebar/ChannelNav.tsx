@@ -33,6 +33,7 @@ interface ChannelNavProps {
   onLeaveVoice: () => void;
   onOpenServerSettings: () => void;
   onOpenCreateChannel: (categoryId?: string) => void;
+  onOpenManageChannel?: (channel: Channel) => void;
   onOpenInvite?: (channelId?: string) => void;
   currentUser: User;
   onOpenUserSettings: () => void;
@@ -52,6 +53,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
   onJoinVoice,
   onOpenServerSettings,
   onOpenCreateChannel,
+  onOpenManageChannel,
   onOpenInvite,
   currentUser,
   onOpenUserSettings,
@@ -328,13 +330,19 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                                 onJoinVoice(channel.id);
                               }
                             }}
+                            onContextMenu={(e) => {
+                              if (canManageChannels && onOpenManageChannel) {
+                                e.preventDefault();
+                                onOpenManageChannel(channel);
+                              }
+                            }}
                             className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg transition-all text-sm font-medium ${
                               isActive
                                 ? 'bg-indigo-600/20 text-white border border-indigo-500/30 shadow-sm font-semibold'
                                 : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
                             }`}
                           >
-                            <div className="flex items-center gap-2 min-w-0">
+                            <div className="flex items-center gap-2 min-w-0 pr-12">
                               {getChannelIcon(channel.type, channel.isPrivate)}
                               <span className="truncate">{channel.name}</span>
                             </div>
@@ -348,19 +356,36 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                             </div>
                           </button>
 
-                          {onOpenInvite && (
-                            <button
-                              id={`btn-invite-channel-${channel.id}`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onOpenInvite(channel.id);
-                              }}
-                              title={`Convidar amigos para #${channel.name}`}
-                              className="absolute right-2 opacity-0 group-hover/chan:opacity-100 hover:text-white text-slate-400 p-1 rounded hover:bg-white/10 transition-opacity cursor-pointer z-10"
-                            >
-                              <UserPlus className="w-3.5 h-3.5" />
-                            </button>
-                          )}
+                          {/* Hover action buttons (Manage Settings & Invite) */}
+                          <div className="absolute right-1.5 flex items-center gap-0.5 opacity-0 group-hover/chan:opacity-100 transition-opacity z-10">
+                            {canManageChannels && onOpenManageChannel && (
+                              <button
+                                id={`btn-manage-channel-${channel.id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenManageChannel(channel);
+                                }}
+                                title={`Gerenciar Sala #${channel.name}`}
+                                className="p-1 rounded hover:text-white text-slate-400 hover:bg-white/10 transition-colors cursor-pointer"
+                              >
+                                <Settings className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {onOpenInvite && (
+                              <button
+                                id={`btn-invite-channel-${channel.id}`}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onOpenInvite(channel.id);
+                                }}
+                                title={`Convidar amigos para #${channel.name}`}
+                                className="p-1 rounded hover:text-white text-slate-400 hover:bg-white/10 transition-colors cursor-pointer"
+                              >
+                                <UserPlus className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         {/* Connected Voice Participants List under voice/project channels */}

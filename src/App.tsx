@@ -22,6 +22,7 @@ import { CreateServerOrChannelModal } from './components/Modals/CreateServerOrCh
 import { InviteModal } from './components/Modals/InviteModal';
 import { ExploreServersModal } from './components/Modals/ExploreServersModal';
 import { AuthModal } from './components/Modals/AuthModal';
+import { ManageChannelModal } from './components/Modals/ManageChannelModal';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { PWAInstallBanner } from './components/Common/PWAInstallBanner';
 import { NotificationToast } from './components/Common/NotificationToast';
@@ -32,6 +33,7 @@ import { botEngine } from './services/botEngine';
 import { updateService, UpdateState } from './services/updateService';
 import { screenShareService } from './services/screenShareService';
 import { webrtcService } from './services/webrtcService';
+import { projectService } from './services/projectService';
 import { useVoiceCall } from './hooks/useVoiceCall';
 import { Sparkles } from 'lucide-react';
 import { ProjectWorkspace } from './components/ProjectRoom/ProjectWorkspace';
@@ -176,6 +178,7 @@ export default function App() {
     open: false,
     mode: 'server',
   });
+  const [managingChannel, setManagingChannel] = useState<Channel | null>(null);
 
   // OTA Update Listener & Background Check
   useEffect(() => {
@@ -562,11 +565,19 @@ export default function App() {
     window.addEventListener('focus', handleWindowFocus);
     const syncTimer = setInterval(handleWindowFocus, 5000);
 
+    const handleSendWs = (e: any) => {
+      if (e.detail && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify(e.detail));
+      }
+    };
+    window.addEventListener('braza-send-ws', handleSendWs);
+
     return () => {
       isDisposed = true;
       clearTimeout(reconnectTimeout);
       clearInterval(heartbeatInterval);
       window.removeEventListener('focus', handleWindowFocus);
+      window.removeEventListener('braza-send-ws', handleSendWs);
       clearInterval(syncTimer);
       unsubscribeNetwork();
       wsRef.current?.close();
@@ -657,6 +668,11 @@ export default function App() {
 
       case 'project-plan-updated': {
         window.dispatchEvent(new CustomEvent('braza-project-plan-updated', { detail: data }));
+        break;
+      }
+
+      case 'file-presence-sync': {
+        window.dispatchEvent(new CustomEvent('braza-file-presence-sync', { detail: data }));
         break;
       }
 
@@ -1059,7 +1075,13 @@ export default function App() {
     await firebaseDb.saveServer(newServer);
   };
 
-  const handleCreateChannel = async (name: string, type: ChannelType, isE2EE: boolean, categoryId?: string) => {
+  const handleCreateChannel = async (
+    name: string,
+    type: ChannelType,
+    isE2EE: boolean,
+    categoryId?: string,
+    projectConfig?: { description?: string; gameEngine?: string }
+  ) => {
     if (!currentServer) return;
     const newChanId = `chan-${Date.now()}`;
     const newChannel: Channel = {
@@ -1072,6 +1094,14 @@ export default function App() {
       isPrivate: false,
     };
 
+    if (type === 'project') {
+      const blankState = projectService.getBlankProjectState(newChanId, name, {
+        description: projectConfig?.description,
+        gameEngine: projectConfig?.gameEngine,
+      });
+      projectService.saveProjectState(newChanId, blankState).catch(() => {});
+    }
+
     const updatedServer = {
       ...currentServer,
       channels: [...currentServer.channels, newChannel],
@@ -1080,6 +1110,85 @@ export default function App() {
     setServers((prev) => prev.map((s) => (s.id === currentServer.id ? updatedServer : s)));
     setActiveChannelId(newChanId);
     await firebaseDb.saveServer(updatedServer);
+  };
+
+  const handleUpdateChannel = async (channelId: string, updates: Partial<Channel>) => {
+    if (!currentServer) return;
+
+    const updatedChannels = currentServer.channels.map((c) =>
+      c.id === channelId ? { ...c, ...updates } : c
+    );
+
+    const updatedServer: Server = {
+      ...currentServer,
+      channels: updatedChannels,
+    };
+
+    setServers((prev) => prev.map((s) => (s.id === currentServer.id ? updatedServer : s)));
+    await firebaseDb.saveServer(updatedServer);
+
+    // Keep managing channel in sync if currently opened
+    setManagingChannel((prev) => (prev && prev.id === channelId ? { ...prev, ...updates } : prev));
+
+    pushNotificationToast(
+      'Sala Atualizada',
+      `As configurações da sala #${updates.name || 'canal'} foram salvas.`,
+      'message'
+    );
+  };
+
+  const handleDeleteChannel = async (channelId: string) => {
+    if (!currentServer) return;
+
+    const channelToDelete = currentServer.channels.find((c) => c.id === channelId);
+    const channelName = channelToDelete?.name || 'sala';
+
+    // 1. If currently connected in voice in this channel, leave voice
+    if (currentVoiceChannelId === channelId) {
+      handleLeaveVoice();
+    }
+
+    // 2. Select next available channel if active channel is deleted
+    const remainingChannels = currentServer.channels.filter((c) => c.id !== channelId);
+    if (activeChannelId === channelId) {
+      const nextChan = remainingChannels[0];
+      if (nextChan) {
+        setActiveChannelId(nextChan.id);
+      }
+    }
+
+    // 3. Complete dependency wipe: messages, files, agent runners and offline cache
+    try {
+      await firebaseDb.deleteChannelMessages(channelId, currentServer.id);
+    } catch (e) {
+      console.warn('Erro ao deletar mensagens da sala:', e);
+    }
+
+    if (channelToDelete?.type === 'project') {
+      try {
+        await projectService.deleteProjectRoom(channelId);
+      } catch (e) {
+        console.warn('Erro ao deletar sala de projeto:', e);
+      }
+    }
+
+    // 4. Update server in state & Firestore
+    const updatedServer: Server = {
+      ...currentServer,
+      channels: remainingChannels,
+    };
+
+    setServers((prev) => prev.map((s) => (s.id === currentServer.id ? updatedServer : s)));
+    await firebaseDb.saveServer(updatedServer);
+
+    // 5. Close managing modal
+    setManagingChannel(null);
+
+    pushNotificationToast(
+      'Sala Excluída',
+      `A sala #${channelName} e todas as suas dependências foram permanentemente excluídas.`,
+      'message'
+    );
   };
 
   const handleUpdateUser = async (updated: Partial<User>) => {
@@ -1457,6 +1566,10 @@ export default function App() {
               setMobileNavOpen(false);
               setCreateModal({ open: true, mode: 'channel', categoryId: catId });
             }}
+            onOpenManageChannel={(chan) => {
+              setMobileNavOpen(false);
+              setManagingChannel(chan);
+            }}
             onOpenInvite={(cId) => {
               setMobileNavOpen(false);
               setShowInviteModal({ open: true, channelId: cId });
@@ -1490,6 +1603,7 @@ export default function App() {
               onToggleMute={handleToggleMute}
               onToggleDeafen={handleToggleDeafen}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
+              onOpenManageChannel={() => setManagingChannel(currentChannel)}
             />
           ) : isVoiceActiveChannel ? (
             <VoiceRoomStage
@@ -1525,6 +1639,7 @@ export default function App() {
               }}
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
               onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
+              onOpenManageChannel={() => setManagingChannel(currentChannel)}
             />
           )}
 
@@ -1596,6 +1711,20 @@ export default function App() {
           server={currentServer}
           onClose={() => setShowServerSettings(false)}
           onUpdateServer={handleUpdateServer}
+          onManageChannel={(chan) => {
+            setShowServerSettings(false);
+            setManagingChannel(chan);
+          }}
+        />
+      )}
+
+      {managingChannel && currentServer && (
+        <ManageChannelModal
+          channel={managingChannel}
+          server={currentServer}
+          onClose={() => setManagingChannel(null)}
+          onUpdateChannel={handleUpdateChannel}
+          onDeleteChannel={handleDeleteChannel}
         />
       )}
 

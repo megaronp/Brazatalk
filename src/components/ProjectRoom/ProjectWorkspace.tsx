@@ -21,20 +21,24 @@ import {
   Terminal,
   Bot,
   Cpu,
-  AlertTriangle
+  AlertTriangle,
+  X
 } from 'lucide-react';
 import {
   Channel,
   User,
   ProjectRoomState,
   ProjectFile,
-  ProjectAgent
+  ProjectAgent,
+  FilePresenceUser
 } from '../../types';
 import { projectService } from '../../services/projectService';
 import { ProjectChat } from './ProjectChat';
 import { ProjectWorkspaceEditor } from './ProjectWorkspaceEditor';
 import { ProjectLLMSettingsModal } from './ProjectLLMSettingsModal';
 import { ProjectAgenticScreen } from './ProjectAgenticScreen';
+
+export type ProjectRoomTab = 'chat' | 'editor' | 'sandbox' | 'docs' | 'agents' | 'agentic';
 
 interface ProjectWorkspaceProps {
   channel: Channel;
@@ -48,6 +52,7 @@ interface ProjectWorkspaceProps {
   onToggleMute: () => void;
   onToggleDeafen: () => void;
   onToggleMobileNav?: () => void;
+  onOpenManageChannel?: () => void;
 }
 
 export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
@@ -62,17 +67,44 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   onToggleMute,
   onToggleDeafen,
   onToggleMobileNav,
+  onOpenManageChannel,
 }) => {
   const [projectState, setProjectState] = useState<ProjectRoomState>(() =>
     projectService.sanitizeState(projectService.getDefaultProjectState(channel.id, channel.name))
   );
   const [activeFileId, setActiveFileId] = useState<string>('');
-  const [layoutMode, setLayoutMode] = useState<'split' | 'chat' | 'workspace'>('split');
-  const [desktopEditorTab, setDesktopEditorTab] = useState<'files' | 'sandbox' | 'rag' | 'agents' | 'agentic'>('agentic');
-  const [mobileTab, setMobileTab] = useState<'chat' | 'editor' | 'sandbox' | 'docs' | 'agents' | 'agentic'>('agentic');
+  const [activeTab, setActiveTab] = useState<ProjectRoomTab>('chat');
+  const [isSideChatOpen, setIsSideChatOpen] = useState(false);
   const [showSettingsModal, setShowSettingsModal] = useState(false);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [isZipping, setIsZipping] = useState(false);
+  const [filePresence, setFilePresence] = useState<Record<string, FilePresenceUser[]>>({});
+
+  // Join channel room for presence tracking
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('braza-send-ws', {
+        detail: {
+          type: 'join-channel',
+          channelId: channel.id,
+          userId: currentUser?.id,
+          userName: currentUser?.name,
+        },
+      })
+    );
+  }, [channel.id, currentUser?.id, currentUser?.name]);
+
+  // Real-time file presence sync listener
+  useEffect(() => {
+    const handlePresenceSync = (e: any) => {
+      const detail = e.detail;
+      if (!detail || detail.channelId !== channel.id) return;
+      setFilePresence(detail.presence || {});
+    };
+
+    window.addEventListener('braza-file-presence-sync', handlePresenceSync);
+    return () => window.removeEventListener('braza-file-presence-sync', handlePresenceSync);
+  }, [channel.id]);
 
   // Load project state from Firestore / local storage on channel change and poll server runner status
   useEffect(() => {
@@ -362,14 +394,12 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
           {/* Swarm & Tela Agêntica Quick Access Button */}
           <button
             type="button"
-            onClick={() => {
-              setLayoutMode('workspace');
-              setDesktopEditorTab('agentic');
-              setMobileTab('agentic');
-            }}
+            onClick={() => setActiveTab('agentic')}
             title="Abrir Tela Agêntica e Swarm de Desenvolvimento Autônomo"
             className={`flex items-center gap-1.5 p-2 sm:px-2.5 sm:py-1.5 rounded-xl border text-xs font-bold transition-all cursor-pointer ${
-              projectState.actionPlan?.status === 'running'
+              activeTab === 'agentic'
+                ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-200 shadow-md shadow-cyan-500/10 ring-1 ring-cyan-500/30'
+                : projectState.actionPlan?.status === 'running'
                 ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300 shadow-md shadow-emerald-500/10'
                 : projectState.pendingUserQuestion
                 ? 'bg-amber-500/20 border-amber-500/40 text-amber-300 animate-pulse'
@@ -383,10 +413,10 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
             />
             <span className="hidden sm:inline">
               {projectState.actionPlan?.status === 'running'
-                ? 'Swarm Ativo (2º Plano)'
+                ? 'Swarm Ativo'
                 : projectState.pendingUserQuestion
                 ? 'Dúvida Agente!'
-                : 'Tela Agêntica'}
+                : 'Swarm IA'}
             </span>
             {projectState.actionPlan?.status === 'running' && (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
@@ -408,45 +438,141 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
             <span className="hidden sm:inline">{isZipping ? 'Compactando...' : 'Baixar ZIP'}</span>
           </button>
 
-          {/* Desktop Layout Split Toggles (Hidden on Mobile) */}
-          <div className="hidden lg:flex items-center bg-[#141724] border border-white/[0.08] p-0.5 rounded-xl">
+          {/* Manage Project Channel Button */}
+          {onOpenManageChannel && (
             <button
+              id="btn-project-manage-channel"
               type="button"
-              onClick={() => setLayoutMode('split')}
-              title="Dividir Tela (Chat + Workspace)"
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                layoutMode === 'split' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={onOpenManageChannel}
+              title="Gerenciar Sala (Renomear / Excluir)"
+              className="flex items-center gap-1.5 p-2 sm:px-3 sm:py-1.5 rounded-xl bg-[#141724] hover:bg-white/[0.08] text-slate-300 hover:text-white border border-white/[0.08] text-xs font-semibold transition-all cursor-pointer"
             >
-              <Columns className="w-3.5 h-3.5" />
+              <Settings className="w-3.5 h-3.5 text-slate-400" />
+              <span className="hidden sm:inline">Gerenciar</span>
             </button>
-
-            <button
-              type="button"
-              onClick={() => setLayoutMode('chat')}
-              title="Apenas Chat dos Agentes"
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                layoutMode === 'chat' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <MessageSquare className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setLayoutMode('workspace')}
-              title="Apenas Workspace & Sandbox"
-              className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                layoutMode === 'workspace' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Maximize2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          )}
         </div>
       </div>
 
-      {/* 2. MOBILE VOICE STATUS RIBBON (Only on mobile when connected in voice) */}
+      {/* 2. UNIFIED WORKSPACE TAB NAVIGATION BAR (Responsive & Desktop) */}
+      <div className="h-11 border-b border-white/[0.08] bg-[#090b11] px-2 sm:px-4 flex items-center justify-between shrink-0 select-none overflow-x-auto">
+        <div className="flex items-center gap-1 sm:gap-1.5 min-w-max">
+          <button
+            type="button"
+            onClick={() => setActiveTab('chat')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'chat'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'
+            }`}
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>Chat</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('editor')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'editor'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'
+            }`}
+          >
+            <FileCode className="w-3.5 h-3.5" />
+            <span>Código</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+              activeTab === 'editor' ? 'bg-white/20 text-white' : 'bg-white/[0.08] text-slate-400'
+            }`}>
+              {projectState.files.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('sandbox')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'sandbox'
+                ? 'bg-emerald-600 text-white shadow-sm shadow-emerald-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'
+            }`}
+          >
+            <Play className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Sandbox</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('docs')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'docs'
+                ? 'bg-amber-600 text-white shadow-sm shadow-amber-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5 text-amber-400" />
+            <span>Docs RAG</span>
+            <span className={`text-[10px] px-1.5 py-0.2 rounded-full font-mono ${
+              activeTab === 'docs' ? 'bg-white/20 text-white' : 'bg-white/[0.08] text-slate-400'
+            }`}>
+              {projectState.ragDocs.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('agents')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'agents'
+                ? 'bg-pink-600 text-white shadow-sm shadow-pink-600/30'
+                : 'text-slate-400 hover:text-white hover:bg-white/[0.05]'
+            }`}
+          >
+            <Bot className="w-3.5 h-3.5 text-pink-400" />
+            <span>Agentes ({projectState.agents.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('agentic')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer relative ${
+              activeTab === 'agentic'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-sm ring-1 ring-white/20'
+                : 'text-slate-300 hover:text-white hover:bg-white/[0.05] bg-indigo-500/10 border border-indigo-500/20'
+            }`}
+          >
+            <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Swarm IA</span>
+            {projectState.actionPlan?.status === 'running' && (
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute -top-0.5 -right-0.5" />
+            )}
+            {projectState.pendingUserQuestion && (
+              <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse absolute -top-0.5 -right-0.5" />
+            )}
+          </button>
+        </div>
+
+        {/* Right Controls in Tab Bar (Desktop: Side Chat Toggle) */}
+        <div className="hidden lg:flex items-center gap-2 pl-3 shrink-0">
+          {activeTab !== 'chat' && (
+            <button
+              type="button"
+              onClick={() => setIsSideChatOpen(!isSideChatOpen)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold border transition-all cursor-pointer ${
+                isSideChatOpen
+                  ? 'bg-indigo-600/20 border-indigo-500/40 text-indigo-300'
+                  : 'bg-[#141724] border-white/[0.08] text-slate-400 hover:text-white hover:bg-white/[0.05]'
+              }`}
+              title={isSideChatOpen ? 'Fechar Chat Lateral Dividido' : 'Abrir Chat Lateral Dividido ao lado'}
+            >
+              <MessageSquare className="w-3.5 h-3.5" />
+              <span>{isSideChatOpen ? 'Ocultar Chat' : 'Chat Lateral'}</span>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* 3. MOBILE VOICE STATUS RIBBON (Only on mobile when connected in voice) */}
       {isUserInProjectVoice && (
         <div className="lg:hidden bg-emerald-950/50 border-b border-emerald-500/20 px-3 py-1.5 flex items-center justify-between text-xs shrink-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -489,132 +615,133 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
         </div>
       )}
 
-      {/* 3. MAIN WORKSPACE CONTENT */}
-      {/* MOBILE LAYOUT (< lg): Single Focused View with Fluid Switching */}
-      <div className="lg:hidden flex-1 flex flex-col min-h-0 overflow-hidden relative">
-        {mobileTab === 'chat' && (
-          <div className="flex-1 h-full overflow-hidden">
+      {/* 4. MAIN WORKSPACE CONTENT: UNIFIED TAB CANVAS (100% spacious, no squished panels) */}
+      <div className="flex-1 flex min-h-0 overflow-hidden relative">
+        {/* Main Tab View */}
+        <div className="flex-1 h-full overflow-hidden flex flex-col min-w-0">
+          {activeTab === 'chat' && (
             <ProjectChat
               projectState={projectState}
               currentUser={currentUser}
               onSelectFile={(fileId) => {
                 setActiveFileId(fileId);
-                setMobileTab('editor');
+                setActiveTab('editor');
               }}
               onDownloadFile={(file) => projectService.downloadSingleFile(file)}
               onSendMessage={handleSendMessage}
               isLoading={isAiLoading}
             />
-          </div>
-        )}
+          )}
 
-        {mobileTab === 'editor' && (
-          <div className="flex-1 h-full overflow-hidden">
+          {activeTab === 'editor' && (
             <ProjectWorkspaceEditor
               projectState={projectState}
               onUpdateState={handleUpdateState}
               activeFileId={activeFileId}
               onSelectFile={setActiveFileId}
               currentTab="files"
+              hideHeader={true}
+              channelId={channel.id}
+              currentUser={currentUser}
+              filePresence={filePresence}
             />
-          </div>
-        )}
+          )}
 
-        {mobileTab === 'sandbox' && (
-          <div className="flex-1 h-full overflow-hidden">
+          {activeTab === 'sandbox' && (
             <ProjectWorkspaceEditor
               projectState={projectState}
               onUpdateState={handleUpdateState}
               activeFileId={activeFileId}
               onSelectFile={setActiveFileId}
               currentTab="sandbox"
+              hideHeader={true}
+              channelId={channel.id}
+              currentUser={currentUser}
+              filePresence={filePresence}
             />
-          </div>
-        )}
+          )}
 
-        {mobileTab === 'docs' && (
-          <div className="flex-1 h-full overflow-hidden">
+          {activeTab === 'docs' && (
             <ProjectWorkspaceEditor
               projectState={projectState}
               onUpdateState={handleUpdateState}
               activeFileId={activeFileId}
               onSelectFile={setActiveFileId}
               currentTab="rag"
+              hideHeader={true}
+              channelId={channel.id}
+              currentUser={currentUser}
+              filePresence={filePresence}
             />
-          </div>
-        )}
+          )}
 
-        {mobileTab === 'agents' && (
-          <div className="flex-1 h-full overflow-hidden">
+          {activeTab === 'agents' && (
             <ProjectWorkspaceEditor
               projectState={projectState}
               onUpdateState={handleUpdateState}
               activeFileId={activeFileId}
               onSelectFile={setActiveFileId}
               currentTab="agents"
+              hideHeader={true}
+              channelId={channel.id}
+              currentUser={currentUser}
+              filePresence={filePresence}
             />
-          </div>
-        )}
+          )}
 
-        {mobileTab === 'agentic' && (
-          <div className="flex-1 h-full overflow-hidden">
+          {activeTab === 'agentic' && (
             <ProjectAgenticScreen
               projectState={projectState}
               onUpdateState={handleUpdateState}
               onSelectFile={(fileId) => {
                 setActiveFileId(fileId);
-                setMobileTab('editor');
+                setActiveTab('editor');
               }}
             />
+          )}
+        </div>
+
+        {/* Optional Collapsible Side Chat (Desktop only, when isSideChatOpen is true and activeTab !== 'chat') */}
+        {isSideChatOpen && activeTab !== 'chat' && (
+          <div className="hidden lg:flex w-[380px] xl:w-[420px] h-full border-l border-white/[0.08] flex-col bg-[#0b0d14] shrink-0 z-10 shadow-2xl">
+            <div className="h-10 px-3 bg-[#090b10] border-b border-white/[0.06] flex items-center justify-between shrink-0">
+              <span className="text-xs font-bold text-slate-200 flex items-center gap-1.5">
+                <MessageSquare className="w-3.5 h-3.5 text-indigo-400" />
+                Chat Lateral dos Agentes
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsSideChatOpen(false)}
+                className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-white/[0.08] transition-colors cursor-pointer"
+                title="Fechar Chat Lateral"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden min-h-0">
+              <ProjectChat
+                projectState={projectState}
+                currentUser={currentUser}
+                onSelectFile={(fileId) => {
+                  setActiveFileId(fileId);
+                  setActiveTab('editor');
+                }}
+                onDownloadFile={(file) => projectService.downloadSingleFile(file)}
+                onSendMessage={handleSendMessage}
+                isLoading={isAiLoading}
+              />
+            </div>
           </div>
         )}
       </div>
 
-      {/* DESKTOP LAYOUT (>= lg): Split or Maximized Panels */}
-      <div className="hidden lg:flex flex-1 overflow-hidden">
-        {/* Left Side: Collaborative Chat & Agents */}
-        {(layoutMode === 'split' || layoutMode === 'chat') && (
-          <div
-            className={`h-full ${
-              layoutMode === 'split' ? 'w-[42%] shrink-0 border-r border-white/[0.08]' : 'w-full'
-            }`}
-          >
-            <ProjectChat
-              projectState={projectState}
-              currentUser={currentUser}
-              onSelectFile={(fileId) => {
-                setActiveFileId(fileId);
-                if (layoutMode === 'chat') setLayoutMode('split');
-              }}
-              onDownloadFile={(file) => projectService.downloadSingleFile(file)}
-              onSendMessage={handleSendMessage}
-              isLoading={isAiLoading}
-            />
-          </div>
-        )}
-
-        {/* Right Side: Virtual Workspace & Sandbox de Testes */}
-        {(layoutMode === 'split' || layoutMode === 'workspace') && (
-          <div className="flex-1 h-full overflow-hidden">
-            <ProjectWorkspaceEditor
-              projectState={projectState}
-              onUpdateState={handleUpdateState}
-              activeFileId={activeFileId}
-              onSelectFile={setActiveFileId}
-              currentTab={desktopEditorTab}
-              onTabChange={setDesktopEditorTab}
-            />
-          </div>
-        )}
-      </div>
-
-      {/* 4. MOBILE BOTTOM NAVIGATION BAR (< lg) */}
+      {/* 5. MOBILE BOTTOM NAVIGATION BAR (< lg) */}
       <div className="lg:hidden border-t border-white/[0.08] bg-[#090b11] px-1 py-1 flex items-center justify-around shrink-0 z-20 shadow-lg">
         <button
           type="button"
-          onClick={() => setMobileTab('chat')}
+          onClick={() => setActiveTab('chat')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer ${
-            mobileTab === 'chat'
+            activeTab === 'chat'
               ? 'text-indigo-400 bg-indigo-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -625,9 +752,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
         <button
           type="button"
-          onClick={() => setMobileTab('editor')}
+          onClick={() => setActiveTab('editor')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer ${
-            mobileTab === 'editor'
+            activeTab === 'editor'
               ? 'text-indigo-400 bg-indigo-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -638,9 +765,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
         <button
           type="button"
-          onClick={() => setMobileTab('sandbox')}
+          onClick={() => setActiveTab('sandbox')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer ${
-            mobileTab === 'sandbox'
+            activeTab === 'sandbox'
               ? 'text-emerald-400 bg-emerald-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -651,9 +778,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
         <button
           type="button"
-          onClick={() => setMobileTab('docs')}
+          onClick={() => setActiveTab('docs')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer ${
-            mobileTab === 'docs'
+            activeTab === 'docs'
               ? 'text-amber-400 bg-amber-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -664,9 +791,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
         <button
           type="button"
-          onClick={() => setMobileTab('agents')}
+          onClick={() => setActiveTab('agents')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer ${
-            mobileTab === 'agents'
+            activeTab === 'agents'
               ? 'text-pink-400 bg-pink-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -677,9 +804,9 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
         <button
           type="button"
-          onClick={() => setMobileTab('agentic')}
+          onClick={() => setActiveTab('agentic')}
           className={`flex flex-col items-center gap-1 py-1 px-2 rounded-xl transition-all cursor-pointer relative ${
-            mobileTab === 'agentic'
+            activeTab === 'agentic'
               ? 'text-cyan-400 bg-cyan-500/15 font-bold scale-105'
               : 'text-slate-400 hover:text-slate-200'
           }`}
@@ -695,7 +822,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
         </button>
       </div>
 
-      {/* 5. LLM & API KEYS SETTINGS MODAL */}
+      {/* 6. LLM & API KEYS SETTINGS MODAL */}
       {showSettingsModal && (
         <ProjectLLMSettingsModal
           projectState={projectState}

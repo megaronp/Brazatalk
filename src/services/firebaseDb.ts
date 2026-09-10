@@ -395,6 +395,22 @@ export const firebaseDb = {
     await deleteDoc(doc(db, 'messages', messageId));
   },
 
+  // Delete all messages belonging to a deleted channel (complete dependency wipe)
+  async deleteChannelMessages(channelId: string, serverId?: string) {
+    try {
+      const messagesRef = collection(db, 'messages');
+      const q = query(messagesRef, where('channelId', '==', channelId));
+      const snap = await getDocs(q);
+      const deletePromises = snap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+      await Promise.all(deletePromises);
+    } catch (e) {
+      console.warn('Failed to delete channel messages:', e);
+    }
+
+    // Clean up offline cache
+    await offlineStorage.clearCachedMessagesForChannel(channelId);
+  },
+
   // User Profile
   async updateUserProfile(userId: string, updates: Partial<User>) {
     const userRef = doc(db, 'users', userId);

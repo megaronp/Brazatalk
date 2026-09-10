@@ -217,6 +217,28 @@ class OfflineStorage {
   }
 
   /**
+   * Clear cached messages for a deleted channel
+   */
+  public async clearCachedMessagesForChannel(channelId: string): Promise<void> {
+    try {
+      const db = await this.initDB();
+      if (!db) return;
+
+      const tx = db.transaction('messages', 'readwrite');
+      const store = tx.objectStore('messages');
+      const index = store.index('channelId');
+      const request = index.getAllKeys(channelId);
+
+      request.onsuccess = () => {
+        const keys = request.result || [];
+        keys.forEach((key) => store.delete(key));
+      };
+    } catch (e) {
+      console.warn('Clear cached messages for channel error:', e);
+    }
+  }
+
+  /**
    * Search offline message history
    */
   public async searchOfflineMessages(channelId: string, query: string): Promise<Message[]> {

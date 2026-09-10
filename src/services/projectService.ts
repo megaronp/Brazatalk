@@ -1,6 +1,20 @@
 import JSZip from 'jszip';
-import { db, doc, getDoc, setDoc, auth } from './firebase';
-import { ProjectRoomState, ProjectFile, ProjectAgent, ProjectRagDoc, ProjectLLMProvider, ProjectActionPlan, InterAgentMessage, ProjectAgentActivity, ProjectPendingQuestion } from '../types';
+import { db, doc, getDoc, setDoc, getDocs, deleteDoc, collection, onSnapshot, auth } from './firebase';
+import {
+  ProjectRoomState,
+  ProjectFile,
+  ProjectAgent,
+  ProjectRagDoc,
+  ProjectLLMProvider,
+  ProjectActionPlan,
+  InterAgentMessage,
+  ProjectAgentActivity,
+  ProjectPendingQuestion,
+  ProjectProfile,
+  ProjectProfileId,
+  FileSaveResult,
+  FilePresenceUser,
+} from '../types';
 
 async function getAuthHeader(): Promise<Record<string, string>> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -27,46 +41,433 @@ export interface LLMKeyConfig {
   customBaseUrl?: string;
 }
 
-export const defaultAgents: ProjectAgent[] = [
-  {
-    id: 'agent-scriptmaster',
-    name: 'ScriptMaster Lua',
-    handle: '@scriptmaster',
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=scriptmaster',
-    role: 'Desenvolvedor Líder de Scripts e Lógica de Rede',
-    color: '#38bdf8', // sky-400
-    skills: ['Sintaxe Lua / FiveM Natives', 'Eventos Net/Client/Server', 'Otimização de Tick/Resmon'],
-    systemPrompt: 'Você é um engenheiro sênior especializado em criar scripts FiveM e mods multiplayer. Seu código é seguro contra cheaters, utiliza boas práticas de ticks (Wait 0 apenas quando estritamente necessário) e eventos registrados corretamente.',
-  },
-  {
-    id: 'agent-balanceador',
-    name: 'Balanceador de Config',
-    handle: '@balanceador',
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=balanceador',
-    role: 'Especialista em Tabelas, JSON, Preços e Itens',
-    color: '#f59e0b', // amber-500
-    skills: ['Estruturação de JSON/Lua Config', 'Balanceamento de Economia', 'Tabelas de Itens e Veículos'],
-    systemPrompt: 'Você é responsável pelos arquivos de configuração (config.json, config.lua). Você estrutura variáveis claras, comentários didáticos para outros admins editarem valores e tabelas organizadas.',
-  },
-  {
-    id: 'agent-auditor',
-    name: 'Auditor de Segurança',
-    handle: '@auditor',
-    avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=auditor',
-    role: 'Auditor de Código, Anti-Exploit e Resmon',
-    color: '#ec4899', // pink-500
-    skills: ['Auditoria Anti-Cheat', 'Validação de Argumentos Server-Side', 'Análise de Desempenho e Bugs'],
-    systemPrompt: 'Você é o auditor de qualidade e segurança. Você analisa códigos em busca de memory leaks, loops infinitos e vulnerabilidades onde jogadores mal-intencionados poderiam disparar ServerEvents com valores forjados.',
-  },
-];
+// -------------------------------------------------------------
+// Catalog of Project Profiles (Data-driven profiles)
+// -------------------------------------------------------------
+export const projectProfiles: Record<ProjectProfileId, ProjectProfile> = {
+  web: {
+    id: 'web',
+    name: 'Web App / Full-stack',
+    engine: 'Web / React & TypeScript',
+    description: 'Aplicações web modernas com interface reativa, componentes e lógica client/server.',
+    previewType: 'web',
+    contextInstructions: 'Foco em desenvolvimento web moderno, componentes limpos, boas práticas de acessibilidade e performance.',
+    agents: [
+      {
+        id: 'agent-frontend',
+        name: 'Engenheiro Frontend',
+        handle: '@frontend',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=frontend-expert',
+        role: 'Líder de Interface, Design System e Componentes',
+        color: '#38bdf8',
+        skills: ['HTML5 Semântico', 'CSS / Tailwind Moderno', 'Componentização Reativa', 'UI/UX Responsivo'],
+        systemPrompt: 'Você é o engenheiro frontend líder. Seu código é moderno, modular, acessível e otimizado para navegadores desktop e mobile.',
+      },
+      {
+        id: 'agent-backend',
+        name: 'Engenheiro Backend & Dados',
+        handle: '@backend',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=backend-architect',
+        role: 'Arquiteto de APIs, Lógica de Negócio e Dados',
+        color: '#f59e0b',
+        skills: ['APIs REST & JSON', 'Validação de Dados', 'Estruturas Assíncronas', 'Tratamento de Exceções'],
+        systemPrompt: 'Você é responsável pela lógica de negócio e manipulação de dados. Você estrutura respostas claras, valida entradas e assegura segurança de ponta a ponta.',
+      },
+      {
+        id: 'agent-qa',
+        name: 'Analista de QA & Segurança',
+        handle: '@qa',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=qa-specialist',
+        role: 'Auditor de Código, Testes e Qualidade',
+        color: '#ec4899',
+        skills: ['Revisão de Código', 'Auditoria de Segurança Web', 'Testes de Borda', 'Performance de Renderização'],
+        systemPrompt: 'Você é o auditor de qualidade e testes. Você revisa scripts e arquivos procurando por vazamentos de memória, erros de runtime e conformidade.',
+      },
+    ],
+    ragDocs: [
+      {
+        id: 'doc-web-standards',
+        title: 'Padrões de Desenvolvimento Web Responsivo',
+        gameEngine: 'Web / React & TypeScript',
+        tags: ['html', 'css', 'javascript', 'responsive'],
+        content: `// Boas práticas Web:
+- Estruture marcação semântica (header, main, section, footer).
+- Estilize com variáveis e classes fluidas.
+- Trate sempre estados de carregamento e erro em chamadas assíncronas.
+- Mantenha funções pequenas e com responsabilidade única.`,
+        uploadedAt: Date.now() - 60000,
+      },
+    ],
+    seedFiles: [
+      {
+        id: 'file-web-index',
+        name: 'index.html',
+        path: 'index.html',
+        language: 'html',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Engenheiro Frontend',
+        content: `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Aplicação Web - Braza Talk</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-container">
+    <header class="app-header">
+      <h1>🚀 Aplicação Web Colaborativa</h1>
+      <p>Desenvolvida na Sala de Projeto do Braza Talk</p>
+    </header>
 
-export const defaultRagDocs: ProjectRagDoc[] = [
-  {
-    id: 'doc-fivem-guide',
-    title: 'Guia de Eventos e Manifest FiveM (FXv2)',
-    gameEngine: 'GTA FiveM / Lua',
-    tags: ['fivem', 'lua', 'fxmanifest', 'events'],
-    content: `// Estrutura padrão fxmanifest.lua
+    <main class="app-card">
+      <h2>Painel de Controle</h2>
+      <p class="description">Esta interface interativa é executada em tempo real no Sandbox Web.</p>
+      
+      <div class="interactive-box">
+        <button id="btnAction" class="btn-primary">Executar Ação</button>
+        <div id="outputLog" class="log-output">Pronto para interagir.</div>
+      </div>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>`,
+      },
+      {
+        id: 'file-web-style',
+        name: 'style.css',
+        path: 'style.css',
+        language: 'css',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Engenheiro Frontend',
+        content: `* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f172a;
+  color: #f8fafc;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.app-container {
+  width: 100%;
+  max-width: 540px;
+}
+
+.app-header {
+  margin-bottom: 24px;
+  text-align: center;
+}
+
+.app-header h1 {
+  font-size: 22px;
+  color: #38bdf8;
+  margin-bottom: 6px;
+}
+
+.app-header p {
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.app-card {
+  background: #1e293b;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+}
+
+.app-card h2 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: #f1f5f9;
+}
+
+.description {
+  font-size: 13px;
+  color: #94a3b8;
+  margin-bottom: 20px;
+}
+
+.btn-primary {
+  background: #0284c7;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  padding: 10px 18px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary:hover {
+  background: #0369a1;
+}
+
+.log-output {
+  margin-top: 16px;
+  background: #090d16;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: monospace;
+  font-size: 12px;
+  color: #34d399;
+  min-height: 48px;
+}`,
+      },
+      {
+        id: 'file-web-js',
+        name: 'app.js',
+        path: 'app.js',
+        language: 'javascript',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Engenheiro Backend & Dados',
+        content: `// Lógica principal da aplicação web
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('btnAction');
+  const log = document.getElementById('outputLog');
+
+  let clickCount = 0;
+
+  if (btn && log) {
+    btn.addEventListener('click', () => {
+      clickCount++;
+      const now = new Date().toLocaleTimeString();
+      log.textContent = \`[\${now}] Ação disparada com sucesso! Total de execuções: \${clickCount}\`;
+    });
+  }
+});`,
+      },
+      {
+        id: 'file-web-readme',
+        name: 'README.md',
+        path: 'README.md',
+        language: 'markdown',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Analista de QA & Segurança',
+        content: `# Projeto Web Colaborativo
+
+Aplicação desenvolvida de forma colaborativa com inteligência artificial no **Braza Talk**.
+
+## Estrutura de Arquivos
+- \`index.html\`: Interface principal do usuário (renderizada na aba Preview Web).
+- \`style.css\`: Folha de estilos e regras visuais responsivas.
+- \`app.js\`: Lógica reativa da aplicação.
+
+## Pré-visualização
+Abra a aba **Preview Web** na Sala de Projeto para visualizar a interface interativa em tempo real.`,
+      },
+    ],
+  },
+
+  python: {
+    id: 'python',
+    name: 'Python & Análise de Dados',
+    engine: 'Python 3 / Data Science & Scripts',
+    description: 'Processamento de dados, automação, scripts analíticos e algoritmos em Python.',
+    previewType: 'console',
+    contextInstructions: 'Foco em Python 3 limpo, tipagem (type hints), tratamento de exceções e modularidade.',
+    agents: [
+      {
+        id: 'agent-dataeng',
+        name: 'Engenheiro de Dados Python',
+        handle: '@dataeng',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=python-engineer',
+        role: 'Especialista em Pipelines, Scripts e Estrutura de Dados',
+        color: '#38bdf8',
+        skills: ['Python 3 Idiomático', 'Manipulação de CSV/JSON', 'Estruturação de Classes', 'Automação'],
+        systemPrompt: 'Você é um engenheiro de software sênior focado em Python 3. Seu código é limpo, utiliza type hints e segue PEP 8 rigorosamente.',
+      },
+      {
+        id: 'agent-analyst',
+        name: 'Cientista de Dados',
+        handle: '@analyst',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=data-scientist',
+        role: 'Modelagem Estatística, Agregação e Métricas',
+        color: '#f59e0b',
+        skills: ['Cálculo Estatístico', 'Transformação de Dados', 'Métricas de Performance', 'Estruturação de Resultados'],
+        systemPrompt: 'Você é responsável pela lógica analítica e regras de negócio de dados. Você estrutura saídas concisas, métricas legíveis e relatórios estruturados.',
+      },
+      {
+        id: 'agent-auditor-py',
+        name: 'Revisor de Código & Testes',
+        handle: '@auditor',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=py-auditor',
+        role: 'Auditoria PEP8, Segurança e Otimização',
+        color: '#ec4899',
+        skills: ['Validação PEP 8', 'Otimização de Memória', 'Tratamento de Falhas', 'Casos de Teste'],
+        systemPrompt: 'Você é o auditor de qualidade e testes. Você analisa o código Python em busca de gargalos, erros de índice ou falta de tratamento de exceções.',
+      },
+    ],
+    ragDocs: [
+      {
+        id: 'doc-py-best-practices',
+        title: 'Guia de Boas Práticas Python 3 & PEP 8',
+        gameEngine: 'Python 3 / Data Science & Scripts',
+        tags: ['python', 'pep8', 'typehints', 'clean-code'],
+        content: `// Boas práticas Python:
+- Use type hints nas assinaturas de funções: def process(data: dict) -> list[str]:
+- Use blocos try/except específicos, nunca except genérico puro sem log.
+- Utilize context managers com with open(...) as f: para manipulação de arquivos.
+- Mantenha o main.py organizado com if __name__ == '__main__':`,
+        uploadedAt: Date.now() - 80000,
+      },
+    ],
+    seedFiles: [
+      {
+        id: 'file-py-main',
+        name: 'main.py',
+        path: 'main.py',
+        language: 'python',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Engenheiro de Dados Python',
+        content: `"""
+Projeto de Processamento e Análise de Dados
+Desenvolvido colaborativamente no Braza Talk
+"""
+from typing import List, Dict, Any
+import json
+import time
+
+def process_data_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Processa e consolida métricas a partir dos registros informados."""
+    if not records:
+        return {"total": 0, "status": "sem registros"}
+
+    total_value = sum(item.get("valor", 0) for item in records)
+    average_value = total_value / len(records)
+
+    return {
+        "total_registros": len(records),
+        "valor_acumulado": round(total_value, 2),
+        "media_valor": round(average_value, 2),
+        "processado_em": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+def main() -> None:
+    sample_dataset = [
+        {"id": 1, "nome": "Registro Alfa", "valor": 150.50},
+        {"id": 2, "nome": "Registro Beta", "valor": 320.00},
+        {"id": 3, "nome": "Registro Gama", "valor": 89.90},
+    ]
+
+    print("=" * 50)
+    print("Iniciando pipeline de processamento de dados...")
+    print(f"Total de registros de entrada: {len(sample_dataset)}")
+    
+    results = process_data_records(sample_dataset)
+    print("Resultados consolidados:")
+    print(json.dumps(results, indent=2, ensure_ascii=False))
+    print("Pipeline finalizado com sucesso.")
+    print("=" * 50)
+
+if __name__ == "__main__":
+    main()
+`,
+      },
+      {
+        id: 'file-py-requirements',
+        name: 'requirements.txt',
+        path: 'requirements.txt',
+        language: 'text',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Engenheiro de Dados Python',
+        content: `# Dependências do projeto Python
+# Adicione bibliotecas conforme o avanço do projeto
+requests>=2.31.0
+pytest>=8.0.0
+`,
+      },
+      {
+        id: 'file-py-readme',
+        name: 'README.md',
+        path: 'README.md',
+        language: 'markdown',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Revisor de Código & Testes',
+        content: `# Projeto Python & Análise de Dados
+
+Módulo de análise e automação desenvolvido de forma colaborativa no **Braza Talk**.
+
+## Como Executar
+\`\`\`bash
+python3 -m venv venv
+source venv/bin/activate # ou venv\\Scripts\\activate no Windows
+pip install -r requirements.txt
+python3 main.py
+\`\`\`
+
+## Saída & Validação
+Utilize o **Terminal de Execução** na Sala de Projeto para simular execuções e testar funções.`,
+      },
+    ],
+  },
+
+  fivem: {
+    id: 'fivem',
+    name: 'GTA FiveM Mod',
+    engine: 'GTA FiveM / Lua',
+    description: 'Recursos multiplayer, scripts client/server, economia e NUI para servidores FiveM.',
+    previewType: 'none',
+    contextInstructions: 'Foco em FiveM FXv2, scripts client/server seguros, validação de source e economia balanceada.',
+    agents: [
+      {
+        id: 'agent-scriptmaster',
+        name: 'ScriptMaster Lua',
+        handle: '@scriptmaster',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=scriptmaster',
+        role: 'Desenvolvedor Líder de Scripts e Lógica de Rede',
+        color: '#38bdf8',
+        skills: ['Sintaxe Lua / FiveM Natives', 'Eventos Net/Client/Server', 'Otimização de Tick/Resmon'],
+        systemPrompt: 'Você é um engenheiro sênior especializado em criar scripts FiveM e mods multiplayer. Seu código é seguro contra cheaters, utiliza boas práticas de ticks e eventos registrados corretamente.',
+      },
+      {
+        id: 'agent-balanceador',
+        name: 'Balanceador de Config',
+        handle: '@balanceador',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=balanceador',
+        role: 'Especialista em Tabelas, JSON, Preços e Itens',
+        color: '#f59e0b',
+        skills: ['Estruturação de JSON/Lua Config', 'Balanceamento de Economia', 'Tabelas de Itens e Veículos'],
+        systemPrompt: 'Você é responsável pelos arquivos de configuração. Você estrutura variáveis claras, comentários didáticos e tabelas organizadas.',
+      },
+      {
+        id: 'agent-auditor',
+        name: 'Auditor de Segurança',
+        handle: '@auditor',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=auditor',
+        role: 'Auditor de Código, Anti-Exploit e Resmon',
+        color: '#ec4899',
+        skills: ['Auditoria Anti-Cheat', 'Validação de Argumentos Server-Side', 'Análise de Desempenho e Bugs'],
+        systemPrompt: 'Você é o auditor de qualidade e segurança FiveM. Você analisa códigos em busca de loops infinitos e vulnerabilidades onde jogadores mal-intencionados poderiam disparar ServerEvents com valores forjados.',
+      },
+    ],
+    ragDocs: [
+      {
+        id: 'doc-fivem-guide',
+        title: 'Guia de Eventos e Manifest FiveM (FXv2)',
+        gameEngine: 'GTA FiveM / Lua',
+        tags: ['fivem', 'lua', 'fxmanifest', 'events'],
+        content: `// Estrutura padrão fxmanifest.lua
 fx_version 'cerulean'
 game 'gta5'
 
@@ -75,388 +476,268 @@ description 'Mod Colaborativo desenvolvido na Sala de Projeto Braza Talk'
 version '1.0.0'
 
 client_scripts {
+    'config.lua',
     'client.lua'
 }
 
 server_scripts {
+    'config.lua',
     'server.lua'
-}
-
-shared_scripts {
-    'config.lua'
 }
 
 // Boas práticas de eventos no FiveM:
 - Nunca confie em dados enviados pelo cliente para dar dinheiro ou itens.
 - Valide source no server: local src = source
 - Use RegisterNetEvent('meumod:evento', function(...) end)`,
-    uploadedAt: Date.now() - 100000,
-  },
-  {
-    id: 'doc-native-audio',
-    title: 'Integração de Áudio e Notificações',
-    gameEngine: 'GTA FiveM / Lua',
-    tags: ['audio', 'ui', 'notify'],
-    content: `// Notificações e Sons nativos FiveM:
-function ShowNotification(text)
-    SetNotificationTextEntry("STRING")
-    AddTextComponentString(text)
-    DrawNotification(false, false)
-end
-
-// Tocar som de frontend nativo:
-PlaySoundFrontend(-1, "CONFIRM_BEEP", "HUD_MINI_GAME_SOUNDSET", 1)`,
-    uploadedAt: Date.now() - 50000,
-  },
-];
-
-export const defaultFiles: ProjectFile[] = [
-  {
-    id: 'file-manifest',
-    name: 'fxmanifest.lua',
-    path: 'fxmanifest.lua',
-    language: 'lua',
-    version: 1,
-    updatedAt: Date.now(),
-    updatedBy: 'ScriptMaster Lua',
-    content: `fx_version 'cerulean'
+        uploadedAt: Date.now() - 100000,
+      },
+    ],
+    seedFiles: [
+      {
+        id: 'file-manifest',
+        name: 'fxmanifest.lua',
+        path: 'fxmanifest.lua',
+        language: 'lua',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'ScriptMaster Lua',
+        content: `fx_version 'cerulean'
 game 'gta5'
 
 author 'Equipe Braza Talk'
-description 'Mod Colaborativo de Veículos e Garagem'
+description 'Recurso FiveM Criado na Sala de Projeto'
 version '1.0.0'
 
 client_scripts {
-    'config.lua',
     'client.lua'
 }
 
 server_scripts {
-    'config.lua',
     'server.lua'
 }
-
-ui_page 'html/index.html'
-
-files {
-    'html/index.html',
-    'html/style.css',
-    'html/script.js'
-}`,
-  },
-  {
-    id: 'file-client',
-    name: 'client.lua',
-    path: 'client.lua',
-    language: 'lua',
-    version: 1,
-    updatedAt: Date.now(),
-    updatedBy: 'ScriptMaster Lua',
-    content: `--[[
-    Braza Talk - Mod Colaborativo
-    Arquivo: client.lua
+`,
+      },
+      {
+        id: 'file-client',
+        name: 'client.lua',
+        path: 'client.lua',
+        language: 'lua',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'ScriptMaster Lua',
+        content: `--[[
+    Recurso FiveM - Client-side
 --]]
-
-local inVehicle = false
-
--- Comando para spawnar veículo de teste configurado
-RegisterCommand('spawncar', function(source, args, rawCommand)
-    local vehicleName = args[1] or Config.DefaultVehicle or 'adder'
-    local playerPed = PlayerPedId()
-    local coords = GetEntityCoords(playerPed)
-    local forward = GetEntityForwardVector(playerPed)
-
-    local spawnCoords = coords + (forward * 3.0)
-
-    -- Carregar modelo na memória
-    local modelHash = GetHashKey(vehicleName)
-    RequestModel(modelHash)
-    while not HasModelLoaded(modelHash) do
-        Wait(10)
-    end
-
-    -- Criar o veículo no mundo
-    local vehicle = CreateVehicle(modelHash, spawnCoords.x, spawnCoords.y, spawnCoords.z, GetEntityHeading(playerPed), true, false)
-    SetPedIntoVehicle(playerPed, vehicle, -1)
-    SetModelAsNoLongerNeeded(modelHash)
-
-    -- Notificar jogador
-    print(("[Braza Talk Mod] Veículo '%s' criado com sucesso!"):format(vehicleName))
-    TriggerEvent('braza:notify', "Veículo " .. vehicleName .. " entregue com sucesso!", "success")
+RegisterCommand('meumod', function()
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    print(('[Braza Talk Mod] Comando executado nas coordenadas: %s'):format(coords))
 end, false)
-
-RegisterNetEvent('braza:notify', function(message, type)
-    SetNotificationTextEntry("STRING")
-    AddTextComponentString("~b~[Braza Talk]~s~ " .. message)
-    DrawNotification(false, false)
-end)`,
-  },
-  {
-    id: 'file-config',
-    name: 'config.json',
-    path: 'config.json',
-    language: 'json',
-    version: 1,
-    updatedAt: Date.now(),
-    updatedBy: 'Balanceador de Config',
-    content: `{
-  "modName": "Braza Garagem & Spawner",
-  "version": "1.0.0",
-  "defaultVehicle": "adder",
-  "allowedVehicles": [
-    { "model": "adder", "displayName": "Truffade Adder", "price": 1000000 },
-    { "model": "t20", "displayName": "Progen T20", "price": 1300000 },
-    { "model": "sultan", "displayName": "Karin Sultan", "price": 45000 },
-    { "model": "bati", "displayName": "Pegassi Bati 801", "price": 30000 }
-  ],
-  "soundEffects": true,
-  "permissionLevel": "user",
-  "maxVehiclesPerPlayer": 1
+`,
+      },
+      {
+        id: 'file-server',
+        name: 'server.lua',
+        path: 'server.lua',
+        language: 'lua',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'ScriptMaster Lua',
+        content: `--[[
+    Recurso FiveM - Server-side com verificação de source
+--]]
+RegisterNetEvent('braza:server:verificarAcao', function(dados)
+    local src = source
+    if not src or src <= 0 then return end
+    print(('[Segurança] Ação verificada para player ID %s'):format(src))
+end)
+`,
+      },
+      {
+        id: 'file-config',
+        name: 'config.json',
+        path: 'config.json',
+        language: 'json',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Balanceador de Config',
+        content: `{
+  "recurso": "braza_mod",
+  "versao": "1.0.0",
+  "habilitado": true,
+  "taxas": {
+    "padrao": 100
+  }
 }`,
+      },
+    ],
   },
-  {
-    id: 'file-preview-html',
-    name: 'index.html',
-    path: 'html/index.html',
-    language: 'html',
-    version: 1,
-    updatedAt: Date.now(),
-    updatedBy: 'Braza ModDev',
-    content: `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <title>Braza Mod UI Preview</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      background: radial-gradient(circle at top, #1e1b4b, #090b10);
-      color: #f8fafc;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-    .card {
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      backdrop-filter: blur(12px);
-      border-radius: 20px;
-      padding: 24px;
-      width: 100%;
-      max-width: 420px;
-      box-shadow: 0 20px 40px rgba(0,0,0,0.5);
-    }
-    h2 { font-size: 18px; margin-bottom: 8px; color: #38bdf8; display: flex; align-items: center; gap: 8px; }
-    p { font-size: 13px; color: #94a3b8; margin-bottom: 20px; }
-    .vehicle-list { display: flex; flex-direction: column; gap: 10px; }
-    .item {
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 12px;
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      cursor: pointer;
-      transition: all 0.2s;
-    }
-    .item:hover { background: rgba(99, 102, 241, 0.2); border-color: #6366f1; transform: translateY(-2px); }
-    .name { font-size: 14px; font-weight: 600; }
-    .price { font-size: 12px; color: #34d399; font-weight: 700; }
-    .btn-spawn {
-      margin-top: 16px;
-      width: 100%;
-      background: #4f46e5;
-      color: white;
-      border: none;
-      padding: 12px;
-      border-radius: 12px;
-      font-weight: 700;
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    .btn-spawn:hover { background: #4338ca; }
-    .log-box {
-      margin-top: 16px;
-      background: #020617;
-      border-radius: 10px;
-      padding: 10px;
-      font-family: monospace;
-      font-size: 11px;
-      color: #cbd5e1;
-      height: 60px;
-      overflow-y: auto;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>⚡ Garagem Braza Talk</h2>
-    <p>Painel NUI de Teste em tempo real do Mod</p>
-    <div class="vehicle-list">
-      <div class="item" onclick="selectCar('adder', '$ 1.000.000')">
-        <span class="name">🏎️ Truffade Adder</span>
-        <span class="price">$ 1.000.000</span>
-      </div>
-      <div class="item" onclick="selectCar('t20', '$ 1.300.000')">
-        <span class="name">🏁 Progen T20</span>
-        <span class="price">$ 1.300.000</span>
-      </div>
-      <div class="item" onclick="selectCar('bati', '$ 30.000')">
-        <span class="name">🏍️ Pegassi Bati 801</span>
-        <span class="price">$ 30.000</span>
-      </div>
-    </div>
-    <button class="btn-spawn" onclick="spawnSelected()">Spawnar Veículo Selecionado</button>
-    <div class="log-box" id="console-logs">> Pronto para testar. Selecione um veículo acima...</div>
-  </div>
 
-  <script>
-    let currentCar = 'adder';
-    function selectCar(model, price) {
-      currentCar = model;
-      log("Veículo selecionado: " + model + " (" + price + ")");
-    }
-    function spawnSelected() {
-      log("⚡ [NUI -> Client] Disparando evento /spawncar " + currentCar);
-      setTimeout(() => {
-        log("✅ Veículo gerado na coordenada (0, 3, 0)!");
-      }, 500);
-    }
-    function log(msg) {
-      const box = document.getElementById('console-logs');
-      if (box) {
-        const line = document.createElement('div');
-        line.textContent = msg;
-        box.appendChild(line);
-        box.scrollTop = box.scrollHeight;
-      }
-    }
-  </script>
-</body>
-</html>`,
+  generic: {
+    id: 'generic',
+    name: 'Projeto Geral / Software',
+    engine: 'Geral / Multi-linguagem',
+    description: 'Projetos de software geral, ferramentas CLI, algoritmos ou documentação.',
+    previewType: 'console',
+    contextInstructions: 'Foco em arquitetura limpa, código legível e documentação objetiva.',
+    agents: [
+      {
+        id: 'agent-architect',
+        name: 'Arquiteto de Software',
+        handle: '@arquiteto',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=architect',
+        role: 'Líder Técnico e Estrutura de Soluções',
+        color: '#38bdf8',
+        skills: ['Arquitetura de Software', 'Clean Architecture', 'Modelagem de Domínio', 'Definição de Interfaces'],
+        systemPrompt: 'Você é o arquiteto de software líder. Você estrutura pastas, contratos, separação de camadas e boas práticas de engenharia.',
+      },
+      {
+        id: 'agent-developer',
+        name: 'Desenvolvedor Full-Stack',
+        handle: '@desenvolvedor',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=developer',
+        role: 'Implementação de Funcionalidades e Algoritmos',
+        color: '#f59e0b',
+        skills: ['Implementação Técnica', 'Algoritmos & Lógica', 'Estruturação de Dados', 'Refatoração'],
+        systemPrompt: 'Você é responsável por implementar código funcional, conciso e bem testado.',
+      },
+      {
+        id: 'agent-reviewer',
+        name: 'Revisor de Código & Testes',
+        handle: '@revisor',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=reviewer',
+        role: 'Garantia de Qualidade e Boas Práticas',
+        color: '#ec4899',
+        skills: ['Code Review', 'Identificação de Bugs', 'Testes de Unidade', 'Documentação'],
+        systemPrompt: 'Você é o revisor de qualidade. Você analisa o código em busca de clareza, manutenibilidade e segurança.',
+      },
+    ],
+    ragDocs: [
+      {
+        id: 'doc-clean-code',
+        title: 'Princípios de Clean Code e Arquitetura Limpa',
+        gameEngine: 'Geral / Multi-linguagem',
+        tags: ['architecture', 'cleancode', 'patterns'],
+        content: `// Princípios de desenvolvimento:
+1. Nomes claros e autoexplicativos para funções e variáveis.
+2. Funções pequenas com objetivo único.
+3. Não repita a si mesmo (DRY).
+4. Separação clara de responsabilidades (SOLID).`,
+        uploadedAt: Date.now() - 50000,
+      },
+    ],
+    seedFiles: [
+      {
+        id: 'file-gen-readme',
+        name: 'README.md',
+        path: 'README.md',
+        language: 'markdown',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Arquiteto de Software',
+        content: `# Projeto de Software Colaborativo
+
+Projeto criado na Sala de Projeto com IA do **Braza Talk**.
+
+## Visão Geral
+Utilize este workspace para conceber, desenvolver e testar soluções em equipe.
+`,
+      },
+      {
+        id: 'file-gen-config',
+        name: 'config.json',
+        path: 'config.json',
+        language: 'json',
+        version: 1,
+        updatedAt: Date.now(),
+        updatedBy: 'Desenvolvedor Full-Stack',
+        content: `{
+  "projectName": "Projeto Colaborativo",
+  "version": "1.0.0",
+  "environment": "development"
+}`,
+      },
+    ],
   },
-];
+};
+
+// Default agents export for backward compatibility
+export const defaultAgents: ProjectAgent[] = projectProfiles.web.agents;
+export const defaultRagDocs: ProjectRagDoc[] = projectProfiles.web.ragDocs;
+export const defaultFiles: ProjectFile[] = projectProfiles.web.seedFiles;
 
 export const projectService = {
-  getDefaultProjectState(channelId: string, channelName?: string): ProjectRoomState {
+  getAllProjectProfiles(): ProjectProfile[] {
+    return Object.values(projectProfiles);
+  },
+
+  getProfile(profileId?: ProjectProfileId): ProjectProfile {
+    if (profileId && projectProfiles[profileId]) {
+      return projectProfiles[profileId];
+    }
+    return projectProfiles.web;
+  },
+
+  getProjectProfile(profileId?: ProjectProfileId): ProjectProfile {
+    return this.getProfile(profileId);
+  },
+
+  getBlankProjectState(
+    channelId: string,
+    channelName?: string,
+    options?: {
+      description?: string;
+      gameEngine?: string;
+      profileId?: ProjectProfileId;
+      previewType?: 'web' | 'console' | 'none';
+    }
+  ): ProjectRoomState {
     const defaultSavedKeys = this.getStoredApiKeys();
-    const defaultPlan: ProjectActionPlan = {
-      id: `plan-${channelId}`,
-      goal: 'Criar sistema de garagem com spawn seguro, NUI e balanceamento de economia',
-      status: 'idle',
-      currentStepIndex: 0,
-      steps: [
-        {
-          id: `step-${channelId}-1`,
-          order: 1,
-          title: 'Estruturar fxmanifest e carregar dependências',
-          description: 'Criação do manifesto com scripts client/server e registro de versão.',
-          assignedAgentHandle: '@scriptmaster',
-          status: 'pending',
-        },
-        {
-          id: `step-${channelId}-2`,
-          order: 2,
-          title: 'Implementar lógica de rede e spawn no client.lua',
-          description: 'Eventos de spawn de veículo, verificação de vaga livre e prevenção de duplicatas.',
-          assignedAgentHandle: '@scriptmaster',
-          status: 'pending',
-        },
-        {
-          id: `step-${channelId}-3`,
-          order: 3,
-          title: 'Configurar tabela de veículos e taxas em config.json',
-          description: 'Definição de modelos permitidos, taxas de seguro e spawn.',
-          assignedAgentHandle: '@balanceador',
-          status: 'pending',
-        },
-        {
-          id: `step-${channelId}-4`,
-          order: 4,
-          title: 'Auditoria de segurança anti-exploit e resmon',
-          description: 'Proteção contra injeção de eventos forjados no server.lua e testes de performance.',
-          assignedAgentHandle: '@auditor',
-          status: 'pending',
-        },
-      ],
-      startedAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    const initialActivities: Record<string, ProjectAgentActivity> = {
-      '@scriptmaster': {
-        agentHandle: '@scriptmaster',
-        status: 'idle',
-        thought: 'Aguardando início do plano de ação.',
-        lastActiveAt: Date.now(),
-      },
-      '@balanceador': {
-        agentHandle: '@balanceador',
-        status: 'idle',
-        thought: 'Pronto para balanceamento de tabelas e configs.',
-        lastActiveAt: Date.now(),
-      },
-      '@auditor': {
-        agentHandle: '@auditor',
-        status: 'idle',
-        thought: 'Monitorando segurança e consumo de resmon.',
-        lastActiveAt: Date.now(),
-      },
-    };
-
-    const initialDialogues: InterAgentMessage[] = [
-      {
-        id: 'dialogue-welcome-1',
-        senderHandle: '@scriptmaster',
-        senderName: 'ScriptMaster Lua',
-        senderAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=scriptmaster',
-        senderColor: '#38bdf8',
-        recipientHandle: 'all',
-        actionType: 'thought',
-        content: 'Swarm de agentes ativo. O plano de ação está pronto para execução contínua em segundo plano.',
-        timestamp: Date.now() - 30000,
-      },
-      {
-        id: 'dialogue-welcome-2',
-        senderHandle: '@auditor',
-        senderName: 'Auditor de Segurança',
-        senderAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=auditor',
-        senderColor: '#ec4899',
-        recipientHandle: '@scriptmaster',
-        actionType: 'proposal',
-        content: 'Estou com guardrails de resmon ativados. Caso surja alguma decisão de arquitetura, perguntaremos no chat e pausaremos com segurança.',
-        timestamp: Date.now() - 20000,
-      },
-    ];
+    const profileId = options?.profileId || 'generic';
+    const profile = this.getProfile(profileId);
 
     return {
       channelId,
-      projectName: channelName ? `Mod ${channelName}` : 'Projeto Mod GTA FiveM',
-      gameEngine: 'GTA FiveM / Lua',
-      targetDescription: 'Criação de scripts, garage NUI e balanceamento de economia para mod multiplayer.',
-      guardrails: 'Mantenha o foco estritamente no desenvolvimento, scripts, configurações e testes deste mod. Recuse assuntos não relacionados à programação ou arquitetura do mod.',
+      projectName: channelName ? channelName.replace(/[_-]/g, ' ') : 'Novo Projeto',
+      projectProfile: profileId,
+      gameEngine: options?.gameEngine || profile.engine || 'Geral / Código',
+      previewType: options?.previewType || profile.previewType || 'web',
+      targetDescription: options?.description || '',
+      guardrails: '',
       selectedProvider: 'gemini',
       selectedModel: 'gemini-flash-latest',
       customApiKey: defaultSavedKeys.geminiKey || '',
       customBaseUrl: defaultSavedKeys.customBaseUrl || '',
-      agents: defaultAgents,
-      ragDocs: defaultRagDocs,
-      files: defaultFiles,
-      activeFileId: defaultFiles[1].id, // client.lua
-      testConsoleLogs: [
-        '[Sistema] Workspace da Sala de Projeto inicializado com sucesso.',
-        '[RAG] 2 documentos técnicos indexados (FiveM Eventos e Áudio).',
-        '[Agentes] 3 especialistas prontos: @scriptmaster, @balanceador, @auditor.',
-        '[Swarm] Execução autônoma em segundo plano disponível.',
-      ],
-      actionPlan: defaultPlan,
-      agenticActivities: initialActivities,
-      interAgentDialogues: initialDialogues,
+      agents: [],
+      ragDocs: [],
+      files: [],
+      activeFileId: '',
+      testConsoleLogs: [],
+      actionPlan: undefined,
+      agenticActivities: {},
+      interAgentDialogues: [],
       pendingUserQuestion: null,
+      updatedAt: Date.now(),
+    };
+  },
+
+  getDefaultProjectState(channelId: string, channelName?: string, profileId: ProjectProfileId = 'generic'): ProjectRoomState {
+    return this.getBlankProjectState(channelId, channelName, { profileId });
+  },
+
+  // Helper method if user explicitly requests to load profile presets
+  applyProfileTemplate(state: ProjectRoomState, profileId: ProjectProfileId): ProjectRoomState {
+    const profile = this.getProfile(profileId);
+    return {
+      ...state,
+      projectProfile: profile.id,
+      gameEngine: profile.engine,
+      previewType: profile.previewType,
+      targetDescription: state.targetDescription || profile.description,
+      agents: profile.agents,
+      ragDocs: profile.ragDocs,
+      files: profile.seedFiles,
+      activeFileId: profile.seedFiles[0]?.id || '',
       updatedAt: Date.now(),
     };
   },
@@ -494,37 +775,244 @@ export const projectService = {
     return state;
   },
 
-  async loadProjectState(channelId: string, channelName?: string): Promise<ProjectRoomState> {
+  // -----------------------------------------------------------------
+  // Granular Subcollection File Management & Real-time Collaboration
+  // -----------------------------------------------------------------
+  subscribeToProjectFiles(channelId: string, onFiles: (files: ProjectFile[]) => void): () => void {
     try {
-      // 1. Try Firestore first
+      const colRef = collection(db, 'projectRooms', channelId, 'files');
+      return onSnapshot(
+        colRef,
+        (snap) => {
+          const files: ProjectFile[] = [];
+          snap.forEach((d) => {
+            files.push({ id: d.id, ...d.data() } as ProjectFile);
+          });
+          files.sort((a, b) => a.name.localeCompare(b.name));
+          onFiles(files);
+        },
+        (err) => {
+          console.warn('subscribeToProjectFiles Firestore warning:', err);
+        }
+      );
+    } catch (e) {
+      console.warn('subscribeToProjectFiles setup error:', e);
+      return () => {};
+    }
+  },
+
+  async saveProjectFile(
+    channelId: string,
+    file: ProjectFile,
+    baseVersion?: number,
+    user?: { name?: string; userName?: string }
+  ): Promise<FileSaveResult> {
+    try {
+      const fileRef = doc(db, 'projectRooms', channelId, 'files', file.id);
+      const snap = await getDoc(fileRef);
+
+      // Optimistic concurrency check
+      if (snap.exists()) {
+        const current = snap.data() as ProjectFile;
+        const currentVersion = current.version || 1;
+        if (baseVersion !== undefined && baseVersion < currentVersion) {
+          return {
+            success: false,
+            conflict: true,
+            serverVersion: currentVersion,
+            currentContent: current.content,
+            message: `Conflito de edição: Este arquivo foi modificado por ${current.updatedBy || 'outro membro'} (Versão no servidor: V${currentVersion}, sua versão base: V${baseVersion}).`,
+            file: current,
+          };
+        }
+      }
+
+      const nextVersion = snap.exists() ? (snap.data().version || 1) + 1 : (file.version || 1);
+      const updatedFile: ProjectFile = {
+        ...file,
+        version: nextVersion,
+        updatedAt: Date.now(),
+        updatedBy: user?.name || user?.userName || 'Membro',
+      };
+
+      await setDoc(fileRef, updatedFile);
+
+      // Mirror to local cache for resilience
+      try {
+        const cachedStr = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
+        if (cachedStr) {
+          const cached = JSON.parse(cachedStr);
+          const currentFiles = Array.isArray(cached.files) ? cached.files : [];
+          const idx = currentFiles.findIndex((f: any) => f.id === file.id);
+          if (idx >= 0) {
+            currentFiles[idx] = updatedFile;
+          } else {
+            currentFiles.push(updatedFile);
+          }
+          cached.files = currentFiles;
+          localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + channelId, JSON.stringify(cached));
+        }
+      } catch {}
+
+      return {
+        success: true,
+        file: updatedFile,
+      };
+    } catch (e: any) {
+      console.warn('saveProjectFile error:', e);
+      return {
+        success: false,
+        message: e?.message || 'Erro ao salvar arquivo.',
+      };
+    }
+  },
+
+  async forceSaveProjectFile(
+    channelId: string,
+    file: ProjectFile,
+    user?: { name?: string; userName?: string }
+  ): Promise<FileSaveResult> {
+    try {
+      const fileRef = doc(db, 'projectRooms', channelId, 'files', file.id);
+      const snap = await getDoc(fileRef);
+      const currentVersion = snap.exists() ? (snap.data().version || 1) : 1;
+      const nextVersion = currentVersion + 1;
+
+      const updatedFile: ProjectFile = {
+        ...file,
+        version: nextVersion,
+        updatedAt: Date.now(),
+        updatedBy: user?.name || user?.userName || 'Membro',
+      };
+
+      await setDoc(fileRef, updatedFile);
+      return {
+        success: true,
+        file: updatedFile,
+      };
+    } catch (e: any) {
+      return {
+        success: false,
+        message: e?.message || 'Erro ao sobrescrever arquivo.',
+      };
+    }
+  },
+
+  async deleteProjectFile(channelId: string, fileId: string): Promise<void> {
+    try {
+      const fileRef = doc(db, 'projectRooms', channelId, 'files', fileId);
+      await deleteDoc(fileRef);
+    } catch (e) {
+      console.warn('deleteProjectFile error:', e);
+    }
+  },
+
+  async deleteProjectRoom(channelId: string): Promise<void> {
+    // 1. Delete all files in subcollection
+    try {
+      const filesColRef = collection(db, 'projectRooms', channelId, 'files');
+      const filesSnap = await getDocs(filesColRef);
+      const deleteFilePromises = filesSnap.docs.map((d) => deleteDoc(d.ref));
+      await Promise.all(deleteFilePromises);
+    } catch (e) {
+      console.warn('Failed to delete project room subcollection files:', e);
+    }
+
+    // 2. Delete root doc in Firestore
+    try {
+      const docRef = doc(db, 'projectRooms', channelId);
+      await deleteDoc(docRef);
+    } catch (e) {
+      console.warn('Failed to delete project room doc:', e);
+    }
+
+    // 3. Clear localStorage cache
+    try {
+      localStorage.removeItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
+      localStorage.removeItem(`project_presence_${channelId}`);
+    } catch {}
+
+    // 4. Terminate autonomous runner and delete disk runner on server
+    try {
+      const headers = await getAuthHeader();
+      await fetch(`/api/project/runner/${channelId}`, {
+        method: 'DELETE',
+        headers,
+      });
+    } catch (e) {
+      console.warn('Failed to delete backend runner:', e);
+    }
+  },
+
+  // -----------------------------------------------------------------
+  // Room State Loading & Metadata Saving
+  // -----------------------------------------------------------------
+  async loadProjectState(channelId: string, channelName?: string): Promise<ProjectRoomState> {
+    let state: ProjectRoomState | null = null;
+
+    // 1. Try Firestore root doc
+    try {
       const docRef = doc(db, 'projectRooms', channelId);
       const snap = await getDoc(docRef);
       if (snap.exists()) {
-        const data = snap.data() as ProjectRoomState;
-        // Merge stored user API keys if not present in doc
-        const storedKeys = this.getStoredApiKeys();
-        if (!data.customApiKey && storedKeys.geminiKey) {
-          data.customApiKey = storedKeys.geminiKey;
-        }
-        return this.sanitizeState(data);
+        state = snap.data() as ProjectRoomState;
       }
     } catch (e) {
-      console.warn('Firestore loadProjectState warning, falling back to local storage:', e);
+      console.warn('Firestore loadProjectState doc warning:', e);
     }
 
     // 2. Try localStorage fallback
-    try {
-      const cached = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        return this.sanitizeState(parsed);
-      }
-    } catch {}
+    if (!state) {
+      try {
+        const cached = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
+        if (cached) {
+          state = JSON.parse(cached);
+        }
+      } catch {}
+    }
 
-    // 3. Return default initial state
-    const defaultState = this.getDefaultProjectState(channelId, channelName);
-    this.saveProjectState(channelId, defaultState).catch(() => {});
-    return this.sanitizeState(defaultState);
+    // 3. Fall back to default blank state
+    if (!state) {
+      state = this.getBlankProjectState(channelId, channelName);
+      this.saveProjectState(channelId, state).catch(() => {});
+    }
+
+    // 4. Load granular files from subcollection /projectRooms/{channelId}/files
+    try {
+      const colRef = collection(db, 'projectRooms', channelId, 'files');
+      const filesSnap = await getDocs(colRef);
+      const subcollectionFiles: ProjectFile[] = [];
+      filesSnap.forEach((d) => {
+        subcollectionFiles.push({ id: d.id, ...d.data() } as ProjectFile);
+      });
+
+      if (subcollectionFiles.length > 0) {
+        state.files = subcollectionFiles;
+      } else if (Array.isArray(state.files) && state.files.length > 0) {
+        // Migration: migrate legacy embedded files array to granular subcollection
+        for (const f of state.files) {
+          const fileDoc = doc(db, 'projectRooms', channelId, 'files', f.id);
+          await setDoc(fileDoc, f);
+        }
+      } else {
+        // Keep files empty for blank project rooms
+        state.files = [];
+      }
+    } catch (e) {
+      console.warn('Error loading subcollection files:', e);
+    }
+
+    if (Array.isArray(state.files)) {
+      state.files.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    // Merge stored user API keys if not present in doc
+    const storedKeys = this.getStoredApiKeys();
+    if (!state.customApiKey && storedKeys.geminiKey) {
+      state.customApiKey = storedKeys.geminiKey;
+    }
+
+    return this.sanitizeState(state);
   },
 
   async saveProjectState(channelId: string, state: ProjectRoomState): Promise<void> {
@@ -535,11 +1023,11 @@ export const projectService = {
       localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + channelId, JSON.stringify(updatedState));
     } catch {}
 
-    // Save to Firestore so other members in the channel see updates in real-time
-    // C4 Security: Strip customApiKey from shared cloud Firestore document
+    // Save room metadata to Firestore (STRIP files array to eliminate clobbering)
     try {
       const docRef = doc(db, 'projectRooms', channelId);
-      const { customApiKey, ...safeCloudState } = updatedState;
+      const { customApiKey, files, ...safeCloudState } = updatedState;
+      // Store without files array so files are strictly owned by subcollection /files
       await setDoc(docRef, safeCloudState, { merge: true });
     } catch (e) {
       console.warn('Firestore saveProjectState error:', e);
@@ -567,38 +1055,30 @@ export const projectService = {
     return await res.json();
   },
 
-  // Export all workspace files into a .ZIP archive ready for game installation
+  // Export all workspace files into a .ZIP archive
   async downloadProjectAsZip(projectState: ProjectRoomState) {
     const zip = new JSZip();
 
-    // Group files by path or root
     projectState.files.forEach((file) => {
       zip.file(file.path || file.name, file.content);
     });
 
-    // Add a README.md automatically if not present
     if (!projectState.files.some((f) => f.name.toLowerCase().startsWith('readme'))) {
       const readmeContent = `# ${projectState.projectName}
-**Plataforma / Engine:** ${projectState.gameEngine}
+**Contexto:** ${projectState.gameEngine || 'Projeto de Software'}
 **Objetivo:** ${projectState.targetDescription}
 
 Criado colaborativamente na Sala de Projeto com IA do **Braza Talk**.
 
 ## Arquivos incluídos:
 ${projectState.files.map((f) => `- \`${f.path || f.name}\` (${f.language})`).join('\n')}
-
-## Como instalar:
-1. Extraia o conteúdo desta pasta no diretório de mods/resources do seu servidor ou jogo.
-2. Certifique-se de configurar as permissões no arquivo de configuração se aplicável.
-3. Bom jogo e bom desenvolvimento!
 `;
       zip.file('README.md', readmeContent);
     }
 
-    // Generate zip blob
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
-    const safeName = (projectState.projectName || 'braza-mod')
+    const safeName = (projectState.projectName || 'braza-project')
       .toLowerCase()
       .replace(/[^a-z0-9_-]/g, '_');
 

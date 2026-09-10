@@ -308,6 +308,59 @@ function broadcast(data: object, excludeWs?: WebSocket) {
   });
 }
 
+interface FilePresenceUser {
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  status: 'viewing' | 'editing';
+  lastPing: number;
+}
+
+// Scoped presence per channel: channelId -> Map<fileId, Map<userId, FilePresenceUser>>
+const channelFilePresence = new Map<string, Map<string, Map<string, FilePresenceUser>>>();
+
+function updateFilePresence(channelId: string, fileId: string, user: FilePresenceUser) {
+  if (!channelFilePresence.has(channelId)) {
+    channelFilePresence.set(channelId, new Map());
+  }
+  const channelMap = channelFilePresence.get(channelId)!;
+  if (!channelMap.has(fileId)) {
+    channelMap.set(fileId, new Map());
+  }
+  channelMap.get(fileId)!.set(user.userId, user);
+}
+
+function removeUserFilePresence(channelId: string, userId: string, fileId?: string) {
+  const channelMap = channelFilePresence.get(channelId);
+  if (!channelMap) return;
+  if (fileId) {
+    channelMap.get(fileId)?.delete(userId);
+  } else {
+    channelMap.forEach((users) => users.delete(userId));
+  }
+}
+
+function getChannelPresenceSummary(channelId: string): Record<string, FilePresenceUser[]> {
+  const channelMap = channelFilePresence.get(channelId);
+  if (!channelMap) return {};
+  const now = Date.now();
+  const summary: Record<string, FilePresenceUser[]> = {};
+  channelMap.forEach((users, fileId) => {
+    const active: FilePresenceUser[] = [];
+    users.forEach((u, uId) => {
+      if (now - u.lastPing < 45000) {
+        active.push(u);
+      } else {
+        users.delete(uId);
+      }
+    });
+    if (active.length > 0) {
+      summary[fileId] = active;
+    }
+  });
+  return summary;
+}
+
 function broadcastToChannel(channelId: string, data: object, excludeWs?: WebSocket) {
   const payload = JSON.stringify(data);
   clients.forEach((client) => {
@@ -669,6 +722,57 @@ wss.on('connection', (ws) => {
           });
           break;
         }
+
+        case 'join-channel': {
+          const client = clients.get(clientId);
+          if (client && msg.channelId) {
+            if (client.currentChannelId && client.currentChannelId !== msg.channelId && client.userId) {
+              removeUserFilePresence(client.currentChannelId, client.userId);
+              broadcastToChannel(client.currentChannelId, {
+                type: 'file-presence-sync',
+                channelId: client.currentChannelId,
+                presence: getChannelPresenceSummary(client.currentChannelId),
+              });
+            }
+            client.currentChannelId = msg.channelId;
+            // Send current channel file presence immediately to connecting user
+            ws.send(JSON.stringify({
+              type: 'file-presence-sync',
+              channelId: msg.channelId,
+              presence: getChannelPresenceSummary(msg.channelId),
+            }));
+          }
+          break;
+        }
+
+        case 'file-presence': {
+          const client = clients.get(clientId);
+          const effectiveUserId = client?.userId || clientId;
+          const effectiveUserName = client?.userName || msg.userName || 'Membro';
+          const effectiveUserAvatar = client?.userAvatar || msg.userAvatar;
+          const channelId = msg.channelId || client?.currentChannelId;
+
+          if (channelId && msg.fileId) {
+            if (msg.status === 'left') {
+              removeUserFilePresence(channelId, effectiveUserId, msg.fileId);
+            } else {
+              updateFilePresence(channelId, msg.fileId, {
+                userId: effectiveUserId,
+                userName: effectiveUserName,
+                userAvatar: effectiveUserAvatar,
+                status: msg.status === 'editing' ? 'editing' : 'viewing',
+                lastPing: Date.now(),
+              });
+            }
+
+            broadcastToChannel(channelId, {
+              type: 'file-presence-sync',
+              channelId,
+              presence: getChannelPresenceSummary(channelId),
+            });
+          }
+          break;
+        }
       }
     } catch (e) {
       console.warn('WS parse error:', e);
@@ -680,6 +784,15 @@ wss.on('connection', (ws) => {
     const participantUserId = client?.userId || clientId;
     const p = voiceParticipants.get(participantUserId);
     const channelId = client?.currentChannelId || p?.channelId;
+
+    if (channelId && participantUserId) {
+      removeUserFilePresence(channelId, participantUserId);
+      broadcastToChannel(channelId, {
+        type: 'file-presence-sync',
+        channelId,
+        presence: getChannelPresenceSummary(channelId),
+      });
+    }
 
     if (p || channelId) {
       voiceParticipants.delete(participantUserId);
@@ -1193,7 +1306,8 @@ function loadRunnerFromDisk(channelId: string): ProjectRunnerState | null {
 
 function broadcastPlanUpdate(runner: ProjectRunnerState, extra?: any) {
   saveRunnerToDisk(runner);
-  broadcast({
+  // Scoped strictly to channel clients to eliminate cross-channel leakage
+  broadcastToChannel(runner.channelId, {
     type: 'project-plan-updated',
     channelId: runner.channelId,
     plan: runner.plan,
@@ -1454,43 +1568,17 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
         } catch {}
       }
 
-      // Fallback file generation if LLM was dry or unavailable
+      // Honest fallback: if LLM returned no files, do NOT inject foreign domain files!
       if (extractedFiles.length === 0) {
-        if (step.order === 1) {
-          extractedFiles.push({
-            name: 'fxmanifest.lua',
-            language: 'lua',
-            content: `fx_version 'cerulean'\ngame 'gta5'\nauthor 'Braza ModDev Swarm'\ndescription '${runner.projectState.projectName}'\nversion '1.0.0'\n\nclient_scripts {\n    'client.lua'\n}\nserver_scripts {\n    'server.lua'\n}\nshared_scripts {\n    'config.lua'\n}\n`,
-          });
-        } else if (step.order === 2) {
-          extractedFiles.push({
-            name: 'server.lua',
-            language: 'lua',
-            content: `-- Server-side de ${runner.projectState.projectName}\nlocal QBCore = nil\n\nRegisterNetEvent('braza:server:validateAction', function(data)\n    local src = source\n    -- Validação de source e segurança anti-cheat\n    if not src or src <= 0 then return end\n    print(('[Segurança] Ação validada para player %s'):format(src))\nend)\n`,
-          });
-        } else {
-          extractedFiles.push({
-            name: 'config.json',
-            language: 'json',
-            content: JSON.stringify(
-              {
-                modName: runner.projectState.projectName,
-                version: '1.0.0',
-                enabled: true,
-                economy: {
-                  spawnFee: 500,
-                  currencyType: 'bank',
-                },
-                antiExploit: {
-                  rateLimitMs: 300,
-                  logViolations: true,
-                },
-              },
-              null,
-              2
-            ),
-          });
-        }
+        addInterAgentDialogue(runner, {
+          senderHandle: agent.handle,
+          senderName: agent.name,
+          senderAvatar: agent.avatar,
+          senderColor: agent.color,
+          actionType: 'thought',
+          content: `ℹ️ O passo ${step.order} ("${step.title}") foi processado pelo agente, porém nenhum novo arquivo precisou ser alterado ou gerado neste momento.`,
+          relatedStepId: step.id,
+        });
       }
 
       // Merge files into projectState with safety bounds (A7)
@@ -1525,7 +1613,7 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
             id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
             name: ef.name,
             path: ef.name,
-            language: ef.language || 'lua',
+            language: ef.language || 'text',
             content: safeContent,
             updatedAt: Date.now(),
             updatedBy: agent.name,
@@ -1534,21 +1622,22 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
         }
       }
 
-      // Auditor review step
-      const auditorAgent = runner.projectState.agents?.find(
-        (a: any) => a.handle === '@auditor'
-      ) || {
-        handle: '@auditor',
-        name: 'Auditor de Segurança',
-        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=auditor',
+      // Dynamic Reviewer / Auditor step based on project profile & agents
+      const engineName = runner.projectState.gameEngine || runner.projectState.projectProfile || 'Projeto';
+      const reviewerAgent = runner.projectState.agents?.find(
+        (a: any) => a.handle.includes('audit') || a.handle.includes('review') || a.handle.includes('qa')
+      ) || runner.projectState.agents?.[0] || {
+        handle: '@revisor',
+        name: 'Revisor de Código',
+        avatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=revisor',
         color: '#ec4899',
       };
 
-      runner.agenticActivities[auditorAgent.handle] = {
-        agentHandle: auditorAgent.handle,
+      runner.agenticActivities[reviewerAgent.handle] = {
+        agentHandle: reviewerAgent.handle,
         status: 'reviewing',
-        currentTask: `Auditoria de ${filesTouchedNames.join(', ')}`,
-        thought: 'Verificando injeções de evento, resmon e conformidade...',
+        currentTask: filesTouchedNames.length > 0 ? `Revisão de ${filesTouchedNames.join(', ')}` : `Revisão da etapa ${step.order}`,
+        thought: `Verificando conformidade técnica com o escopo de ${engineName}...`,
         lastActiveAt: Date.now(),
       };
 
@@ -1556,14 +1645,18 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
       await new Promise((r) => setTimeout(r, 1000));
       if (runner.paused) break;
 
+      const reviewReviewText = filesTouchedNames.length > 0
+        ? `✅ Arquivos (${filesTouchedNames.join(', ')}) revisados no contexto de ${engineName}! Sintaxe e estrutura verificadas. Passo ${step.order} aprovado.`
+        : `✅ Etapa ${step.order} ("${step.title}") revisada e aprovada pelo time técnico.`;
+
       addInterAgentDialogue(runner, {
-        senderHandle: auditorAgent.handle,
-        senderName: auditorAgent.name,
-        senderAvatar: auditorAgent.avatar,
-        senderColor: auditorAgent.color,
+        senderHandle: reviewerAgent.handle,
+        senderName: reviewerAgent.name,
+        senderAvatar: reviewerAgent.avatar,
+        senderColor: reviewerAgent.color,
         recipientHandle: agent.handle,
         actionType: 'code_review',
-        content: `✅ Arquivos (${filesTouchedNames.join(', ')}) auditados! Resmon estimado < 0.01ms e validações de source OK. Passo ${step.order} aprovado.`,
+        content: reviewReviewText,
         relatedStepId: step.id,
       });
 
@@ -1575,7 +1668,7 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
 
       runner.agenticActivities[agent.handle].status = 'idle';
       runner.agenticActivities[agent.handle].thought = 'Pronto para próxima tarefa.';
-      runner.agenticActivities[auditorAgent.handle].status = 'idle';
+      runner.agenticActivities[reviewerAgent.handle].status = 'idle';
 
       runner.plan.currentStepIndex++;
       runner.plan.updatedAt = Date.now();
@@ -1599,23 +1692,29 @@ app.post('/api/project/plan/generate', requireAuth, async (req, res) => {
     return res.status(400).json({ success: false, error: 'O objetivo do plano é obrigatório.' });
   }
 
-  const prompt = `Você é o Arquiteto de Sistemas de Mods Multiplayer (@arquiteto).
-Crie um Plano de Ação estruturado em 3 a 5 passos executáveis para atingir o objetivo: "${goal}" no projeto "${projectState?.projectName || 'Mod'}" (${projectState?.gameEngine || 'GTA FiveM'}).
+  const engine = projectState?.gameEngine || projectState?.projectProfile || 'Projeto de Software';
+  const projectName = projectState?.projectName || 'Projeto';
+  const availableAgents = Array.isArray(projectState?.agents) && projectState.agents.length > 0
+    ? projectState.agents.map((a: any) => `- ${a.handle}: ${a.name} (${a.role}). Especialidades: ${Array.isArray(a.skills) ? a.skills.join(', ') : ''}`).join('\n')
+    : '- @arquiteto: Líder e Planejador\n- @desenvolvedor: Implementação e Código\n- @revisor: Testes e Validação';
 
-Distribua as tarefas entre os agentes disponíveis:
-- @scriptmaster: Código de rede, lógica FiveM/Lua, eventos client/server.
-- @balanceador: Arquivos de configuração (config.json, config.lua), economia, tabelas de dados.
-- @auditor: Anti-cheat, otimização de resmon, testes de segurança e validação final.
+  const defaultAgentHandle = projectState?.agents?.[0]?.handle || '@desenvolvedor';
 
-Responda ESTRITAMENTE em formato JSON com a seguinte estrutura exata (sem formatação extra):
+  const prompt = `Você é o Arquiteto de Software e Planejador de IA (@arquiteto).
+Crie um Plano de Ação estruturado em 3 a 5 passos executáveis para atingir o objetivo: "${goal}" no projeto "${projectName}" (${engine}).
+
+Distribua as tarefas estritamente entre os agentes disponíveis no projeto:
+${availableAgents}
+
+Responda ESTRITAMENTE em formato JSON com a seguinte estrutura exata (sem formatação extra, apenas JSON puro):
 {
   "goal": "${goal}",
   "steps": [
     {
       "order": 1,
       "title": "Título conciso do passo",
-      "description": "Descrição detalhada do que será implementado e quais arquivos serão criados",
-      "assignedAgentHandle": "@scriptmaster"
+      "description": "Descrição detalhada do que será implementado e quais arquivos serão criados ou atualizados",
+      "assignedAgentHandle": "${defaultAgentHandle}"
     }
   ]
 }`;
@@ -1648,34 +1747,39 @@ Responda ESTRITAMENTE em formato JSON com a seguinte estrutura exata (sem format
     console.log('Plan generation AI fallback:', e?.message || e);
   }
 
-  // Fallback plan if AI fails
+  // Dynamic fallback plan aligned with the room's actual agents and target
   if (!generatedPlanData || !Array.isArray(generatedPlanData.steps)) {
+    const agentsList = Array.isArray(projectState?.agents) && projectState.agents.length > 0 ? projectState.agents : [];
+    const leadAgent = agentsList[0]?.handle || defaultAgentHandle;
+    const configAgent = agentsList.find((a: any) => a.handle.includes('config') || a.handle.includes('balance') || a.handle.includes('back'))?.handle || leadAgent;
+    const reviewAgent = agentsList.find((a: any) => a.handle.includes('audit') || a.handle.includes('qa') || a.handle.includes('review'))?.handle || leadAgent;
+
     generatedPlanData = {
       goal,
       steps: [
         {
           order: 1,
-          title: 'Estruturação de Manifest e Dependências',
-          description: 'Criação do fxmanifest.lua e definição dos scripts de cliente e servidor.',
-          assignedAgentHandle: '@scriptmaster',
+          title: 'Estruturação do Escopo e Arquitetura',
+          description: `Definição da estrutura inicial de arquivos e ponto de entrada para "${goal}".`,
+          assignedAgentHandle: leadAgent,
         },
         {
           order: 2,
-          title: 'Implementação de Eventos e Lógica Central',
-          description: 'Criação do client.lua e server.lua com proteção de source.',
-          assignedAgentHandle: '@scriptmaster',
+          title: 'Implementação da Lógica Principal',
+          description: `Desenvolvimento dos componentes e lógica central para atender a: "${goal}".`,
+          assignedAgentHandle: leadAgent,
         },
         {
           order: 3,
-          title: 'Tabelas de Configuração e Balanceamento',
-          description: 'Criação do config.json com taxas, permissões e parâmetros ajustáveis.',
-          assignedAgentHandle: '@balanceador',
+          title: 'Configuração e Parâmetros',
+          description: 'Criação de arquivos de configuração, variáveis de ambiente e documentação de uso.',
+          assignedAgentHandle: configAgent,
         },
         {
           order: 4,
-          title: 'Auditoria de Segurança e Validação de Resmon',
-          description: 'Inspeção de vulnerabilidades de rede e testes no Sandbox.',
-          assignedAgentHandle: '@auditor',
+          title: 'Revisão de Código e Validação',
+          description: 'Inspeção de qualidade, testes de execução e conformidade com as regras do projeto.',
+          assignedAgentHandle: reviewAgent,
         },
       ],
     };
@@ -1843,6 +1947,26 @@ app.get('/api/project/plan/status/:channelId', requireAuth, (req, res) => {
     pendingUserQuestion: runner.pendingUserQuestion,
     files: runner.projectState?.files || [],
   });
+});
+
+// 6. Delete Autonomous Plan Runner and disk snapshot
+app.delete('/api/project/runner/:channelId', requireAuth, (req, res) => {
+  const { channelId } = req.params;
+  const runner = projectRunners.get(channelId);
+  if (runner) {
+    runner.paused = true;
+    runner.plan.status = 'paused';
+    projectRunners.delete(channelId);
+  }
+  try {
+    const filePath = path.join(RUNNERS_STORAGE_DIR, `${channelId}.json`);
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+    }
+  } catch (e) {
+    console.warn('Failed to delete runner file from disk:', e);
+  }
+  return res.json({ success: true, message: 'Runner removido com sucesso.' });
 });
 
 // Helper to securely detect current origin URL for desktop installers (C1, M8)

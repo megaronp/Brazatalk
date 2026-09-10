@@ -15,6 +15,7 @@ import {
   UserPlus,
   UserCheck,
   Download,
+  Settings,
 } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
@@ -37,6 +38,7 @@ interface ChatAreaProps {
   onOpenE2EESecurityModal: () => void;
   onToggleMobileNav?: () => void;
   onOpenInvite?: () => void;
+  onOpenManageChannel?: () => void;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -52,6 +54,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onOpenE2EESecurityModal,
   onToggleMobileNav,
   onOpenInvite,
+  onOpenManageChannel,
 }) => {
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -237,6 +240,18 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           >
             <Users className="w-4 h-4" />
           </button>
+
+          {/* Channel Management Settings */}
+          {onOpenManageChannel && !isDirectMessage && (
+            <button
+              id="btn-chat-manage-channel"
+              onClick={onOpenManageChannel}
+              title={`Gerenciar Sala #${channel.name}`}
+              className="p-1.5 rounded-lg hover:bg-white/[0.06] hover:text-slate-200 transition-colors"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 

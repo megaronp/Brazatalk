@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Key, Shield, Check, X, Sparkles, ExternalLink, RefreshCw } from 'lucide-react';
-import { ProjectRoomState, ProjectLLMProvider } from '../../types';
+import { Key, Shield, Check, X, Sparkles, ExternalLink, RefreshCw, Cpu, Layers } from 'lucide-react';
+import { ProjectRoomState, ProjectLLMProvider, ProjectProfileId } from '../../types';
 import { projectService, LLMKeyConfig } from '../../services/projectService';
 
 interface ProjectLLMSettingsModalProps {
@@ -23,7 +23,13 @@ export const ProjectLLMSettingsModal: React.FC<ProjectLLMSettingsModalProps> = (
     }
     return m;
   });
+  const [selectedProfile, setSelectedProfile] = useState<ProjectProfileId>(
+    projectState.projectProfile || 'generic'
+  );
+  const [applyProfileAgents, setApplyProfileAgents] = useState(true);
   const [savedSuccess, setSavedSuccess] = useState(false);
+
+  const availableProfiles = projectService.getAllProjectProfiles();
 
   useEffect(() => {
     // Sync when provider changes to set sensible default model
@@ -57,12 +63,24 @@ export const ProjectLLMSettingsModal: React.FC<ProjectLLMSettingsModalProps> = (
     else if (selectedProvider === 'groq') activeKey = keys.groqKey || '';
     else if (selectedProvider === 'deepseek') activeKey = keys.deepseekKey || '';
 
-    onUpdateState({
+    const updatePayload: Partial<ProjectRoomState> = {
       selectedProvider,
       selectedModel,
       customApiKey: activeKey,
       customBaseUrl: keys.customBaseUrl,
-    });
+    };
+
+    if (selectedProfile !== projectState.projectProfile) {
+      updatePayload.projectProfile = selectedProfile;
+      const profileDef = projectService.getProjectProfile(selectedProfile);
+      updatePayload.previewType = profileDef.previewType;
+      if (applyProfileAgents) {
+        updatePayload.agents = profileDef.agents;
+        updatePayload.ragDocs = profileDef.ragDocs;
+      }
+    }
+
+    onUpdateState(updatePayload);
 
     setSavedSuccess(true);
     setTimeout(() => {
@@ -89,13 +107,13 @@ export const ProjectLLMSettingsModal: React.FC<ProjectLLMSettingsModalProps> = (
             </div>
             <div>
               <h2 className="text-lg font-black text-white tracking-tight flex items-center gap-2">
-                Configurar Modelos & Chaves de IA
+                Configurações da Sala de Projeto
                 <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">
-                  BYOK
+                  Perfil & Modelos
                 </span>
               </h2>
               <p className="text-xs text-slate-400 mt-0.5">
-                Escolha o provedor de IA da Sala de Projeto e gerencie suas chaves privadas.
+                Alterne o tipo de projeto, provedor de IA e gerencie chaves privadas com segurança.
               </p>
             </div>
           </div>
@@ -109,6 +127,56 @@ export const ProjectLLMSettingsModal: React.FC<ProjectLLMSettingsModalProps> = (
         </div>
 
         <form onSubmit={handleSave} className="p-6 space-y-6 max-h-[75vh] overflow-y-auto">
+          {/* Project Profile Selection */}
+          <div>
+            <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+              <span>Perfil do Projeto (Stack & Arquitetura)</span>
+              <span className="text-[10px] text-indigo-400 font-normal">Define agentes, RAG e sandbox</span>
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {availableProfiles.map((p) => {
+                const isSelected = selectedProfile === p.id;
+                return (
+                  <button
+                    type="button"
+                    key={p.id}
+                    onClick={() => setSelectedProfile(p.id)}
+                    className={`p-3 rounded-2xl border text-left transition-all relative overflow-hidden cursor-pointer ${
+                      isSelected
+                        ? 'bg-indigo-600/20 border-indigo-500 shadow-md shadow-indigo-600/10 text-white'
+                        : 'bg-[#131622] border-white/[0.06] hover:bg-[#181c2b] text-slate-400'
+                    }`}
+                  >
+                    <div className="font-bold text-xs truncate">{p.name}</div>
+                    <div className="text-[10px] text-slate-400 mt-0.5 truncate">{p.engine}</div>
+                    {isSelected && (
+                      <div className="absolute top-2 right-2">
+                        <Check className="w-3.5 h-3.5 text-indigo-400" />
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            {selectedProfile !== projectState.projectProfile && (
+              <div className="mt-2.5 p-2.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-xs text-indigo-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Cpu className="w-4 h-4 text-indigo-400 shrink-0" />
+                  <span>Atualizar agentes e base de conhecimento para o novo perfil?</span>
+                </div>
+                <label className="flex items-center gap-1.5 cursor-pointer text-white font-medium text-[11px] shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={applyProfileAgents}
+                    onChange={(e) => setApplyProfileAgents(e.target.checked)}
+                    className="rounded border-slate-700 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  <span>Sim</span>
+                </label>
+              </div>
+            )}
+          </div>
+
           {/* Provider Selection */}
           <div>
             <label className="block text-xs font-bold text-slate-300 uppercase tracking-wider mb-2.5">

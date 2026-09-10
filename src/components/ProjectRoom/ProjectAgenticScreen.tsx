@@ -323,8 +323,16 @@ export const ProjectAgenticScreen: React.FC<ProjectAgenticScreenProps> = ({
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          {agentsList.map((agent) => {
+        {agentsList.length === 0 ? (
+          <div className="p-4 rounded-2xl bg-[#121522] border border-white/[0.06] text-center">
+            <p className="text-xs text-slate-300 font-medium mb-1">Nenhum agente configurado nesta sala ainda.</p>
+            <p className="text-[11px] text-slate-500">
+              Você pode adicionar agentes personalizados na aba "Agentes" do Workspace ou aplicar uma equipe sugerida nas configurações.
+            </p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {agentsList.map((agent) => {
             const activity = projectState.agenticActivities?.[agent.handle];
             const status = activity?.status || 'idle';
 
@@ -389,7 +397,8 @@ export const ProjectAgenticScreen: React.FC<ProjectAgenticScreenProps> = ({
               </div>
             );
           })}
-        </div>
+          </div>
+        )}
       </div>
 
       {/* 4. MAIN SPLIT: INTERACTIVE ACTION PLAN & INTER-AGENT DIALOGUE */}

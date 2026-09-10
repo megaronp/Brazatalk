@@ -305,11 +305,45 @@ export interface ProjectPendingQuestion {
   timestamp: number;
 }
 
+export type ProjectProfileId = 'web' | 'python' | 'fivem' | 'generic';
+
+export interface ProjectProfile {
+  id: ProjectProfileId;
+  name: string;
+  engine: string;
+  description: string;
+  previewType: 'web' | 'console' | 'none';
+  agents: ProjectAgent[];
+  ragDocs: ProjectRagDoc[];
+  seedFiles: ProjectFile[];
+  contextInstructions: string;
+}
+
+export interface FilePresenceUser {
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  status: 'viewing' | 'editing';
+  lastPing: number;
+}
+
+export interface FileSaveResult {
+  success: boolean;
+  conflict?: boolean;
+  serverVersion?: number;
+  currentContent?: string;
+  serverContent?: string;
+  message?: string;
+  file?: ProjectFile;
+}
+
 export interface ProjectRoomState {
   channelId: string;
   serverId?: string;
   projectName: string;
-  gameEngine: string; // e.g. "GTA FiveM / Lua", "Minecraft / Fabric", "Unity / C#", "Unreal Engine / C++", "Skyrim / Papyrus", "Web / React"
+  projectProfile?: ProjectProfileId;
+  gameEngine: string; // e.g. "Web / Full-stack", "Python / Data Science", "GTA FiveM / Lua", "Generic / Code"
+  previewType?: 'web' | 'console' | 'none';
   targetDescription: string;
   guardrails: string;
   selectedProvider: ProjectLLMProvider;

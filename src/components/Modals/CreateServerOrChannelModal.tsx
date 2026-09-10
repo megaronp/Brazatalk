@@ -7,7 +7,13 @@ interface CreateServerOrChannelModalProps {
   categoryId?: string;
   onClose: () => void;
   onCreateServer?: (name: string, icon: string, description: string, e2ee: boolean) => void;
-  onCreateChannel?: (name: string, type: ChannelType, isE2EE: boolean, categoryId?: string) => void;
+  onCreateChannel?: (
+    name: string,
+    type: ChannelType,
+    isE2EE: boolean,
+    categoryId?: string,
+    projectConfig?: { description?: string; gameEngine?: string }
+  ) => void;
 }
 
 export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProps> = ({
@@ -22,6 +28,8 @@ export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProp
   const [icon, setIcon] = useState('🔥');
   const [channelType, setChannelType] = useState<ChannelType>('text');
   const [isE2EE, setIsE2EE] = useState(false);
+  const [projectDescription, setProjectDescription] = useState('');
+  const [projectEngine, setProjectEngine] = useState('Geral / Código');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -30,7 +38,15 @@ export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProp
     if (mode === 'server' && onCreateServer) {
       onCreateServer(name.trim(), icon, description.trim(), isE2EE);
     } else if (mode === 'channel' && onCreateChannel) {
-      onCreateChannel(name.trim().toLowerCase().replace(/\s+/g, '-'), channelType, isE2EE, categoryId);
+      onCreateChannel(
+        name.trim().toLowerCase().replace(/\s+/g, '-'),
+        channelType,
+        isE2EE,
+        categoryId,
+        channelType === 'project'
+          ? { description: projectDescription.trim(), gameEngine: projectEngine }
+          : undefined
+      );
     }
     onClose();
   };
@@ -186,13 +202,56 @@ export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProp
                   <input
                     type="text"
                     required
-                    placeholder="novo-canal"
+                    placeholder={channelType === 'project' ? 'meu-projeto-ia' : 'novo-canal'}
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full bg-[#141722] border border-white/[0.08] rounded-xl pl-8 pr-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-indigo-500 transition-colors"
                   />
                 </div>
               </div>
+
+              {channelType === 'project' && (
+                <div className="p-3.5 rounded-2xl bg-indigo-950/20 border border-indigo-500/20 space-y-3 animate-in fade-in duration-150">
+                  <div className="flex items-start gap-2.5">
+                    <Sparkles className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+                    <div>
+                      <h5 className="text-xs font-bold text-indigo-300">Sala Criada em Branco</h5>
+                      <p className="text-[11px] text-slate-400 mt-0.5 leading-relaxed">
+                        A sala será inicializada limpa, sem arquivos mockados ou planos artificiais. Você terá total liberdade para configurar seu projeto do zero.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
+                      Objetivo / Descrição do Projeto (Opcional)
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Desenvolver API REST em TypeScript..."
+                      value={projectDescription}
+                      onChange={(e) => setProjectDescription(e.target.value)}
+                      className="w-full bg-[#111420] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition-colors"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1">
+                      Ambiente / Contexto Tecnológico (Opcional)
+                    </label>
+                    <select
+                      value={projectEngine}
+                      onChange={(e) => setProjectEngine(e.target.value)}
+                      className="w-full bg-[#111420] border border-white/[0.08] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 transition-colors cursor-pointer"
+                    >
+                      <option value="Geral / Código">Geral / Código Livre</option>
+                      <option value="Web App (Frontend/Backend)">Web App (Frontend / Backend)</option>
+                      <option value="Python (Scripts/Dados)">Python (Scripts / Análise)</option>
+                      <option value="GTA FiveM (Lua/NUI)">GTA FiveM (Lua / NUI)</option>
+                    </select>
+                  </div>
+                </div>
+              )}
             </>
           )}
 

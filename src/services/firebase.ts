@@ -34,7 +34,8 @@ import {
   onSnapshot,
   serverTimestamp,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  runTransaction
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -80,6 +81,7 @@ export {
   onSnapshot,
   serverTimestamp,
   arrayUnion,
-  arrayRemove
+  arrayRemove,
+  runTransaction
 };
 export type { FirebaseUser };

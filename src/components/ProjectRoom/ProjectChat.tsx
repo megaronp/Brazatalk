@@ -54,21 +54,7 @@ export const ProjectChat: React.FC<ProjectChatProps> = ({
   isLoading,
 }) => {
   const [inputText, setInputText] = useState('');
-  const [messages, setMessages] = useState<ProjectMessage[]>([
-    {
-      id: 'welcome-msg',
-      senderType: 'agent',
-      authorName: 'ScriptMaster Lua',
-      authorHandle: '@scriptmaster',
-      authorAvatar: 'https://api.dicebear.com/7.x/bottts/svg?seed=scriptmaster',
-      authorColor: '#38bdf8',
-      authorRole: 'Desenvolvedor Líder de Scripts e Lógica de Rede',
-      content: `Olá equipe! A **Sala de Projeto IA** está pronta para o desenvolvimento do mod **${projectState.projectName}** (${projectState.gameEngine}).\n\nNossa equipe de agentes está pronta:\n- **@scriptmaster**: scripts FiveM/Lua, eventos e lógica de jogo.\n- **@balanceador**: arquivos de configuração (config.json) e tabelas.\n- **@auditor**: segurança anti-exploit e otimização de resmon.\n\nTodo arquivo que criarmos vai direto para o seu **Workspace** e você pode testar no **Sandbox** ou baixar o pacote completo em **.ZIP**! Como podemos começar?`,
-      timestamp: Date.now() - 60000,
-      files: projectState.files.slice(0, 2),
-      testRecommendation: 'Abra a aba Sandbox de Testes para testar o NUI no preview web ou executar os scripts no terminal.',
-    },
-  ]);
+  const [messages, setMessages] = useState<ProjectMessage[]>([]);
 
   const [expandedSnippets, setExpandedSnippets] = useState<Record<string, boolean>>({});
   const [answeringQuestion, setAnsweringQuestion] = useState(false);
@@ -208,14 +194,43 @@ export const ProjectChat: React.FC<ProjectChatProps> = ({
       </div>
 
       {/* Messages Feed */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-5">
-        {messages.map((msg) => {
-          const isUser = msg.senderType === 'user';
-          return (
-            <div
-              key={msg.id}
-              className={`flex gap-3.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} animate-in fade-in duration-150`}
-            >
+      <div className="flex-1 overflow-y-auto p-4 space-y-5 flex flex-col">
+        {messages.length === 0 ? (
+          <div className="m-auto flex flex-col items-center justify-center text-center p-6 select-none max-w-md">
+            <div className="w-12 h-12 rounded-2xl bg-indigo-600/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-3 shadow-lg shadow-indigo-600/10">
+              <Sparkles className="w-6 h-6" />
+            </div>
+            <h3 className="text-sm font-bold text-white mb-1">
+              Sala de Projeto em Branco
+            </h3>
+            <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+              Esta sala foi iniciada limpa para você poder configurar livremente.
+              Envie instruções ou dúvidas pelo chat abaixo para iniciar o trabalho colaborativo.
+            </p>
+            {projectState.agents && projectState.agents.length > 0 && (
+              <div className="flex flex-wrap items-center justify-center gap-1.5">
+                {projectState.agents.map((ag) => (
+                  <button
+                    key={ag.id}
+                    type="button"
+                    onClick={() => setInputText(`${ag.handle} `)}
+                    className="px-2.5 py-1 rounded-xl bg-white/[0.04] hover:bg-white/[0.08] border border-white/[0.06] text-slate-300 hover:text-white text-xs flex items-center gap-1.5 cursor-pointer transition-colors"
+                  >
+                    <span className="font-mono text-indigo-400 font-bold">{ag.handle}</span>
+                    <span className="text-[11px] text-slate-400">{ag.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : (
+          messages.map((msg) => {
+            const isUser = msg.senderType === 'user';
+            return (
+              <div
+                key={msg.id}
+                className={`flex gap-3.5 ${isUser ? 'flex-row-reverse' : 'flex-row'} animate-in fade-in duration-150`}
+              >
               {/* Avatar */}
               <div className="shrink-0 mt-0.5">
                 <img
@@ -346,7 +361,7 @@ export const ProjectChat: React.FC<ProjectChatProps> = ({
               </div>
             </div>
           );
-        })}
+        }))}
 
         {isLoading && (
           <div className="flex gap-3.5 items-center animate-pulse">
