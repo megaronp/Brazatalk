@@ -131,7 +131,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
   // Real-time Firestore listener for files inside this project room
   useEffect(() => {
     const unsubscribe = projectService.subscribeToProjectFiles(channel.id, (remoteFiles) => {
-      if (Array.isArray(remoteFiles) && remoteFiles.length > 0) {
+      if (Array.isArray(remoteFiles)) {
         setProjectState((prev) => ({
           ...prev,
           files: remoteFiles,
@@ -152,10 +152,13 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
       const detail = e.detail;
       if (!detail || detail.channelId !== channel.id) return;
       
-      const runnerFiles = detail.projectState?.files;
-      if (Array.isArray(runnerFiles) && runnerFiles.length > 0) {
-        for (const rf of runnerFiles) {
-          await projectService.saveProjectFile(channel.id, rf, undefined, { name: 'Swarm IA' }).catch(() => {});
+      // Elect a single client to persist changed files to avoid write amplification & version race conditions (R3)
+      const isInitiator = detail.initiatorUserId ? detail.initiatorUserId === currentUser?.id : true;
+      if (isInitiator && detail.stepCompleted && Array.isArray(detail.changedFiles) && detail.changedFiles.length > 0) {
+        for (const cf of detail.changedFiles) {
+          await projectService.saveProjectFile(channel.id, cf, undefined, { name: 'Swarm IA' }).catch((err) => {
+            console.warn('Failed to persist runner file to Firestore:', err);
+          });
         }
       }
 
@@ -165,14 +168,14 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
         agenticActivities: detail.activities || prev.agenticActivities,
         interAgentDialogues: detail.dialogues || prev.interAgentDialogues,
         pendingUserQuestion: detail.pendingQuestion !== undefined ? detail.pendingQuestion : prev.pendingUserQuestion,
-        files: detail.projectState?.files || prev.files,
+        files: detail.projectState?.files || detail.files || prev.files,
         testConsoleLogs: detail.projectState?.testConsoleLogs || prev.testConsoleLogs,
       }));
     };
 
     window.addEventListener('braza-project-plan-updated', handlePlanUpdate);
     return () => window.removeEventListener('braza-project-plan-updated', handlePlanUpdate);
-  }, [channel.id]);
+  }, [channel.id, currentUser?.id]);
 
   // Voice state
   const isUserInProjectVoice = currentVoiceChannelId === channel.id;

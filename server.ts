@@ -22,11 +22,18 @@ app.use(
     contentSecurityPolicy: {
       directives: {
         defaultSrc: ["'self'"],
-        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
-        imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
-        connectSrc: ["'self'", "wss:", "ws:", "https:", "http:"],
+        imgSrc: ["'self'", "data:", "blob:", "https:"],
+        connectSrc: [
+          "'self'",
+          "wss:",
+          "ws:",
+          "https://*.googleapis.com",
+          "https://*.firebaseio.com",
+          "wss://*.firebaseio.com",
+        ],
         frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", "https://ai.studio"],
       },
     },
@@ -1297,6 +1304,7 @@ interface ProjectRunnerState {
   projectState: any;
   isExecuting: boolean;
   paused: boolean;
+  initiatorUserId?: string;
 }
 
 const projectRunners = new Map<string, ProjectRunnerState>();
@@ -1317,6 +1325,7 @@ function saveRunnerToDisk(runner: ProjectRunnerState) {
       agenticActivities: runner.agenticActivities,
       interAgentDialogues: runner.interAgentDialogues.slice(-60),
       pendingUserQuestion: runner.pendingUserQuestion,
+      initiatorUserId: runner.initiatorUserId,
       projectState: {
         ...runner.projectState,
         customApiKey: undefined, // Never save sensitive API keys
@@ -1341,6 +1350,7 @@ function loadRunnerFromDisk(channelId: string): ProjectRunnerState | null {
         interAgentDialogues: data.interAgentDialogues || [],
         pendingUserQuestion: data.pendingUserQuestion || null,
         projectState: data.projectState || {},
+        initiatorUserId: data.initiatorUserId,
         isExecuting: false,
         paused: true,
       };
@@ -1360,6 +1370,7 @@ function broadcastPlanUpdate(runner: ProjectRunnerState, extra?: any) {
     interAgentDialogues: runner.interAgentDialogues,
     pendingUserQuestion: runner.pendingUserQuestion,
     files: runner.projectState?.files || [],
+    initiatorUserId: runner.initiatorUserId,
     ...extra,
   });
 }
@@ -1691,20 +1702,31 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
       if (runner.paused) break;
 
       let reviewReviewText = '';
-      const aiReviewerClient = getAiClient();
-      if (filesTouchedNames.length > 0 && aiReviewerClient) {
+      const reviewerApiKey = runner.projectState.customApiKey?.trim() || process.env.GEMINI_API_KEY;
+      if (filesTouchedNames.length > 0 && reviewerApiKey) {
         try {
+          const aiReviewerClient = new GoogleGenAI({ apiKey: reviewerApiKey });
+          let reviewModelName = runner.projectState.selectedModel || 'gemini-flash-latest';
+          if (
+            reviewModelName === 'gemini-2.5-flash' ||
+            reviewModelName === 'gemini-2.5-pro' ||
+            reviewModelName === 'gemini-2.0-flash' ||
+            reviewModelName === 'gemini-1.5-flash' ||
+            reviewModelName === 'gemini-3.6-flash'
+          ) {
+            reviewModelName = 'gemini-flash-latest';
+          }
           const filesSummary = extractedFiles
             .slice(0, 3)
             .map((f: any) => `### ${f.name}\n\`\`\`${f.language || ''}\n${typeof f.content === 'string' ? f.content.slice(0, 1500) : ''}\n\`\`\``)
             .join('\n\n');
           const reviewPrompt = `Você é o agente técnico ${reviewerAgent.name} (${reviewerAgent.role || 'Auditor de Código'}). Faça uma breve revisão técnica dos arquivos gerados para a etapa "${step.title}" no contexto de ${engineName}:\n\n${filesSummary}\n\nForneça um parecer conciso de 1 ou 2 frases em português sobre qualidade, boas práticas e integridade. Comece com "✅" se aprovado ou "⚠️" se houver atenção recomendada.`;
           const reviewResponse: any = await withTimeout(
-            aiReviewerClient.models.generateContent({
-              model: runner.projectState.selectedModel || 'gemini-2.5-flash',
-              contents: [{ role: 'user', parts: [{ text: reviewPrompt }] }],
+            generateWithFallback(aiReviewerClient, {
+              model: reviewModelName,
+              contents: reviewPrompt,
             }),
-            12000,
+            15000,
             'Timeout de revisão'
           );
           const feedback = reviewResponse?.text?.trim();
@@ -1746,7 +1768,15 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
       runner.plan.currentStepIndex++;
       runner.plan.updatedAt = Date.now();
 
-      broadcastPlanUpdate(runner);
+      const changedFilesList = filesTouchedNames.length > 0
+        ? runner.projectState.files.filter((f: any) => filesTouchedNames.includes(f.name))
+        : [];
+
+      broadcastPlanUpdate(runner, {
+        stepCompleted: true,
+        filesTouched: filesTouchedNames,
+        changedFiles: changedFilesList,
+      });
 
       // Delay between steps
       await new Promise((r) => setTimeout(r, 2000));
@@ -1885,6 +1915,7 @@ app.post('/api/project/plan/start', requireAuth, (req, res) => {
     return res.status(400).json({ success: false, error: 'channelId e plan são obrigatórios.' });
   }
 
+  const initiatorUid = (req as any).user?.uid;
   let runner = projectRunners.get(channelId);
   if (!runner) {
     runner = {
@@ -1894,6 +1925,7 @@ app.post('/api/project/plan/start', requireAuth, (req, res) => {
       interAgentDialogues: [],
       pendingUserQuestion: null,
       projectState: projectState || {},
+      initiatorUserId: initiatorUid,
       isExecuting: false,
       paused: false,
     };
@@ -1901,6 +1933,7 @@ app.post('/api/project/plan/start', requireAuth, (req, res) => {
   } else {
     runner.plan = plan;
     if (projectState) runner.projectState = projectState;
+    if (initiatorUid) runner.initiatorUserId = initiatorUid;
     runner.paused = false;
   }
 
@@ -1962,6 +1995,11 @@ app.post('/api/project/plan/answer-question', requireAuth, (req, res) => {
   const runner = projectRunners.get(channelId);
   if (!runner) {
     return res.status(404).json({ success: false, error: 'Sessão do projeto não encontrada.' });
+  }
+
+  const answeringUserId = (req as any).user?.uid;
+  if (answeringUserId) {
+    runner.initiatorUserId = answeringUserId;
   }
 
   const currentStep = runner.plan.steps.find((s) => s.id === stepId) || runner.plan.steps[runner.plan.currentStepIndex];
