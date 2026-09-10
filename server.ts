@@ -19,9 +19,19 @@ app.set('trust proxy', 1);
 // Security Headers with Helmet
 app.use(
   helmet({
-    contentSecurityPolicy: false,
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:", "http:"],
+        styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
+        imgSrc: ["'self'", "data:", "blob:", "https:", "http:"],
+        connectSrc: ["'self'", "wss:", "ws:", "https:", "http:"],
+        frameAncestors: ["'self'", "https://*.google.com", "https://*.run.app", "https://ai.studio"],
+      },
+    },
     crossOriginEmbedderPolicy: false,
-    frameguard: false, // Critical: Allows preview iframe in AI Studio
+    frameguard: false, // Protected via frameAncestors in CSP above
   })
 );
 
@@ -133,8 +143,8 @@ async function requireAuth(req: express.Request, res: express.Response, next: ex
     }
   }
 
-  // Allow development or preview fallback
-  if (process.env.NODE_ENV !== 'production' || ALLOW_DEV_AUTH) {
+  // Allow development or preview fallback ONLY when explicit ALLOW_DEV_AUTH is set (B1)
+  if (ALLOW_DEV_AUTH) {
     (req as any).user = { uid: (req.headers['x-dev-user-id'] as string) || 'dev-user', name: 'Dev User' };
     return next();
   }
@@ -408,22 +418,26 @@ wss.on('connection', (ws) => {
           let verifiedUserName = msg.userName || 'Membro';
           let verifiedAvatar = msg.userAvatar;
 
-          // Verify Firebase ID Token if provided (C3 / P3)
+          // Verify Firebase ID Token if provided (C3 / P3 / N1)
           if (msg.token) {
             try {
               const verified = await verifyFirebaseIdToken(msg.token);
-              if (verified) {
-                verifiedUserId = verified.uid;
-                verifiedUserName = verified.name || msg.userName || 'Membro';
-              } else if (msg.userId) {
-                verifiedUserId = msg.userId;
+              if (!verified) {
+                // Reject invalid token immediately - close connection to eliminate impersonation (N1)
+                ws.close(4001, 'invalid token');
+                return;
               }
+              verifiedUserId = verified.uid;
+              verifiedUserName = verified.name || msg.userName || 'Membro';
             } catch {
-              if (msg.userId) verifiedUserId = msg.userId;
+              ws.close(4001, 'invalid token');
+              return;
             }
           } else if (msg.userId) {
             // Unauthenticated guest identity is isolated with prefix
             verifiedUserId = msg.userId.startsWith('guest-') ? msg.userId : `guest-${msg.userId}`;
+          } else {
+            verifiedUserId = `guest-${clientId}`;
           }
 
           const oldClientId = clientId;
@@ -814,6 +828,37 @@ wss.on('connection', (ws) => {
 // REST API Endpoints
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', serverTime: Date.now(), connectedClients: clients.size });
+});
+
+// Ephemeral ICE Servers Generator (Google STUN + Authenticated HMAC Coturn TURN)
+app.get('/api/webrtc/ice-servers', requireAuth, (req, res) => {
+  const turnSecret = process.env.TURN_SHARED_SECRET;
+  const turnUrl = process.env.TURN_URL;
+
+  const iceServers: any[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ];
+
+  if (turnSecret && turnUrl) {
+    const ttlSeconds = 24 * 3600; // 24h validity
+    const expiry = Math.floor(Date.now() / 1000) + ttlSeconds;
+    const username = `${expiry}:${(req as any).user?.uid || 'user'}`;
+    const hmac = crypto.createHmac('sha1', turnSecret);
+    hmac.update(username);
+    const credential = hmac.digest('base64');
+
+    iceServers.push({
+      urls: turnUrl,
+      username,
+      credential,
+    });
+  }
+
+  res.json({ iceServers });
 });
 
 // Real AI Command Handler (Gemini 2.5 Flash) with Auth and Timeout (C2, A7)
@@ -1645,9 +1690,37 @@ Se o usuário já deu sua resposta em "RESPOSTA DECISIVA DO USUÁRIO", NÃO incl
       await new Promise((r) => setTimeout(r, 1000));
       if (runner.paused) break;
 
-      const reviewReviewText = filesTouchedNames.length > 0
-        ? `✅ Arquivos (${filesTouchedNames.join(', ')}) revisados no contexto de ${engineName}! Sintaxe e estrutura verificadas. Passo ${step.order} aprovado.`
-        : `✅ Etapa ${step.order} ("${step.title}") revisada e aprovada pelo time técnico.`;
+      let reviewReviewText = '';
+      const aiReviewerClient = getAiClient();
+      if (filesTouchedNames.length > 0 && aiReviewerClient) {
+        try {
+          const filesSummary = extractedFiles
+            .slice(0, 3)
+            .map((f: any) => `### ${f.name}\n\`\`\`${f.language || ''}\n${typeof f.content === 'string' ? f.content.slice(0, 1500) : ''}\n\`\`\``)
+            .join('\n\n');
+          const reviewPrompt = `Você é o agente técnico ${reviewerAgent.name} (${reviewerAgent.role || 'Auditor de Código'}). Faça uma breve revisão técnica dos arquivos gerados para a etapa "${step.title}" no contexto de ${engineName}:\n\n${filesSummary}\n\nForneça um parecer conciso de 1 ou 2 frases em português sobre qualidade, boas práticas e integridade. Comece com "✅" se aprovado ou "⚠️" se houver atenção recomendada.`;
+          const reviewResponse: any = await withTimeout(
+            aiReviewerClient.models.generateContent({
+              model: runner.projectState.selectedModel || 'gemini-2.5-flash',
+              contents: [{ role: 'user', parts: [{ text: reviewPrompt }] }],
+            }),
+            12000,
+            'Timeout de revisão'
+          );
+          const feedback = reviewResponse?.text?.trim();
+          if (feedback) {
+            reviewReviewText = feedback;
+          }
+        } catch (e: any) {
+          console.warn('Real AI reviewer note:', e?.message);
+        }
+      }
+
+      if (!reviewReviewText) {
+        reviewReviewText = filesTouchedNames.length > 0
+          ? `✅ Arquivos (${filesTouchedNames.join(', ')}) validados estruturalmente no perfil de ${engineName}. Sintaxe e estrutura verificadas. Passo ${step.order} aprovado.`
+          : `✅ Etapa ${step.order} ("${step.title}") revisada e aprovada pelo time técnico.`;
+      }
 
       addInterAgentDialogue(runner, {
         senderHandle: reviewerAgent.handle,

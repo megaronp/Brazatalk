@@ -246,6 +246,7 @@ export interface ProjectFile {
   updatedAt: number;
   updatedBy: string; // user or agent name
   version: number;
+  description?: string;
 }
 
 export interface ProjectPlanStep {

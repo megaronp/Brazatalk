@@ -102,27 +102,6 @@ export const firebaseDb = {
       return () => {};
     }
 
-    const attachLabChannel = (servers: Server[]) => {
-      servers.forEach((srv) => {
-        if (!srv.channels.some((c) => c.type === 'project')) {
-          const catProjId = `cat-project-${srv.id}`;
-          if (!srv.categories.some((cat) => cat.name.includes('PROJETO'))) {
-            srv.categories.push({ id: catProjId, serverId: srv.id, name: 'SALAS DE PROJETO IA' });
-          }
-          srv.channels.push({
-            id: `chan-lab-mods-${srv.id}`,
-            serverId: srv.id,
-            categoryId: catProjId,
-            name: 'lab-mods-ia',
-            type: 'project' as ChannelType,
-            topic: 'Sala de Projeto IA: Workspace de Mods, Agentes, RAG, Arquivos e Sandbox de Testes',
-            isE2EE: false,
-            isPrivate: false,
-          });
-        }
-      });
-    };
-
     const serversRef = collection(db, 'servers');
 
     return onSnapshot(serversRef, (snapshot) => {
@@ -141,7 +120,6 @@ export const firebaseDb = {
         return isOwner || isMember || isPublicCommunity;
       });
 
-      attachLabChannel(userServers);
       callback(userServers);
       offlineStorage.cacheServers(userServers).catch(() => {});
     }, (err) => {

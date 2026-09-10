@@ -30,12 +30,14 @@ service cloud.firestore {
     // Servers Collection: community servers and guilds
     match /servers/{serverId} {
       allow read: if isAuthenticated();
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && (
+        request.resource.data.ownerId == request.auth.uid ||
+        isAdmin()
+      );
       allow update: if isAuthenticated() && (
         resource.data.ownerId == request.auth.uid ||
         (request.resource.data.ownerId == resource.data.ownerId &&
          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberIds'])) ||
-        (serverId == 'server-braza-community') ||
         isAdmin()
       );
       allow delete: if isAuthenticated() && (
@@ -49,7 +51,7 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && request.resource.data.channelId == channelId;
       allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow delete: if isAuthenticated() && isAdmin();
 
       // Granular per-file documents to eliminate collaborative clobbering
       match /files/{fileId} {
@@ -60,17 +62,28 @@ service cloud.firestore {
       }
     }
 
-    // Messages Collection: authenticated messages, bot replies, and reactions
+    // Messages Collection: authenticated messages, author edit rules, and reactions
     match /messages/{messageId} {
       allow read: if isAuthenticated();
       allow create: if isAuthenticated() && (
         request.resource.data.authorId == request.auth.uid ||
         request.resource.data.userId == request.auth.uid ||
-        request.resource.data.isBot == true ||
         isAdmin()
       );
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        // Author editing own message (authorId and channelId must be strictly immutable)
+        ((resource.data.authorId == request.auth.uid || resource.data.userId == request.auth.uid) &&
+         request.resource.data.authorId == resource.data.authorId &&
+         request.resource.data.channelId == resource.data.channelId) ||
+        // Other users can only toggle reactions or pin status
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned'])) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        resource.data.authorId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
+        isAdmin()
+      );
     }
 
     // Subcollection messages inside servers/channels
@@ -79,12 +92,18 @@ service cloud.firestore {
       allow create: if isAuthenticated() && (
         request.resource.data.authorId == request.auth.uid ||
         request.resource.data.userId == request.auth.uid ||
-        request.resource.data.isBot == true ||
         isAdmin()
       );
-      allow update: if isAuthenticated();
+      allow update: if isAuthenticated() && (
+        ((resource.data.authorId == request.auth.uid || resource.data.userId == request.auth.uid) &&
+         request.resource.data.authorId == resource.data.authorId &&
+         request.resource.data.channelId == resource.data.channelId) ||
+        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned'])) ||
+        isAdmin()
+      );
       allow delete: if isAuthenticated() && (
         resource.data.authorId == request.auth.uid ||
+        resource.data.userId == request.auth.uid ||
         isAdmin()
       );
     }

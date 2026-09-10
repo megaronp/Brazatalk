@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import { db, doc, getDoc, setDoc, getDocs, deleteDoc, collection, onSnapshot, auth } from './firebase';
+import { db, doc, getDoc, setDoc, getDocs, deleteDoc, collection, onSnapshot, auth, runTransaction } from './firebase';
 import {
   ProjectRoomState,
   ProjectFile,
@@ -809,54 +809,73 @@ export const projectService = {
   ): Promise<FileSaveResult> {
     try {
       const fileRef = doc(db, 'projectRooms', channelId, 'files', file.id);
-      const snap = await getDoc(fileRef);
 
-      // Optimistic concurrency check
-      if (snap.exists()) {
-        const current = snap.data() as ProjectFile;
-        const currentVersion = current.version || 1;
-        if (baseVersion !== undefined && baseVersion < currentVersion) {
-          return {
-            success: false,
-            conflict: true,
-            serverVersion: currentVersion,
-            currentContent: current.content,
-            message: `Conflito de edição: Este arquivo foi modificado por ${current.updatedBy || 'outro membro'} (Versão no servidor: V${currentVersion}, sua versão base: V${baseVersion}).`,
-            file: current,
-          };
+      let conflictResult: FileSaveResult | null = null;
+      let savedFile: ProjectFile | null = null;
+
+      await runTransaction(db, async (transaction) => {
+        const snap = await transaction.get(fileRef);
+
+        // Optimistic concurrency check inside atomic transaction
+        if (snap.exists()) {
+          const current = snap.data() as ProjectFile;
+          const currentVersion = current.version || 1;
+          if (baseVersion !== undefined && baseVersion < currentVersion) {
+            conflictResult = {
+              success: false,
+              conflict: true,
+              serverVersion: currentVersion,
+              currentContent: current.content,
+              message: `Conflito de edição: Este arquivo foi modificado por ${current.updatedBy || 'outro membro'} (Versão no servidor: V${currentVersion}, sua versão base: V${baseVersion}).`,
+              file: current,
+            };
+            return;
+          }
         }
+
+        const nextVersion = snap.exists() ? (snap.data().version || 1) + 1 : (file.version || 1);
+        const updatedFile: ProjectFile = {
+          ...file,
+          version: nextVersion,
+          updatedAt: Date.now(),
+          updatedBy: user?.name || user?.userName || 'Membro',
+        };
+
+        transaction.set(fileRef, updatedFile);
+        savedFile = updatedFile;
+      });
+
+      if (conflictResult) {
+        return conflictResult;
       }
 
-      const nextVersion = snap.exists() ? (snap.data().version || 1) + 1 : (file.version || 1);
-      const updatedFile: ProjectFile = {
-        ...file,
-        version: nextVersion,
-        updatedAt: Date.now(),
-        updatedBy: user?.name || user?.userName || 'Membro',
-      };
-
-      await setDoc(fileRef, updatedFile);
-
-      // Mirror to local cache for resilience
-      try {
-        const cachedStr = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
-        if (cachedStr) {
-          const cached = JSON.parse(cachedStr);
-          const currentFiles = Array.isArray(cached.files) ? cached.files : [];
-          const idx = currentFiles.findIndex((f: any) => f.id === file.id);
-          if (idx >= 0) {
-            currentFiles[idx] = updatedFile;
-          } else {
-            currentFiles.push(updatedFile);
+      if (savedFile) {
+        // Mirror to local cache for resilience
+        try {
+          const cachedStr = localStorage.getItem(LOCAL_STORAGE_KEY_PREFIX + channelId);
+          if (cachedStr) {
+            const cached = JSON.parse(cachedStr);
+            const currentFiles = Array.isArray(cached.files) ? cached.files : [];
+            const idx = currentFiles.findIndex((f: any) => f.id === file.id);
+            if (idx >= 0) {
+              currentFiles[idx] = savedFile;
+            } else {
+              currentFiles.push(savedFile);
+            }
+            cached.files = currentFiles;
+            localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + channelId, JSON.stringify(cached));
           }
-          cached.files = currentFiles;
-          localStorage.setItem(LOCAL_STORAGE_KEY_PREFIX + channelId, JSON.stringify(cached));
-        }
-      } catch {}
+        } catch {}
+
+        return {
+          success: true,
+          file: savedFile,
+        };
+      }
 
       return {
-        success: true,
-        file: updatedFile,
+        success: false,
+        message: 'Falha ao salvar arquivo.',
       };
     } catch (e: any) {
       console.warn('saveProjectFile error:', e);

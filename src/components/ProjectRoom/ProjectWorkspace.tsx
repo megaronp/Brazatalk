@@ -128,11 +128,37 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
     });
   }, [channel.id]);
 
+  // Real-time Firestore listener for files inside this project room
+  useEffect(() => {
+    const unsubscribe = projectService.subscribeToProjectFiles(channel.id, (remoteFiles) => {
+      if (Array.isArray(remoteFiles) && remoteFiles.length > 0) {
+        setProjectState((prev) => ({
+          ...prev,
+          files: remoteFiles,
+          activeFileId:
+            prev.activeFileId && remoteFiles.some((f) => f.id === prev.activeFileId)
+              ? prev.activeFileId
+              : remoteFiles[0]?.id || '',
+        }));
+      }
+    });
+
+    return () => unsubscribe();
+  }, [channel.id]);
+
   // Real-time broadcast listener from WebSocket for background agent execution
   useEffect(() => {
-    const handlePlanUpdate = (e: any) => {
+    const handlePlanUpdate = async (e: any) => {
       const detail = e.detail;
       if (!detail || detail.channelId !== channel.id) return;
+      
+      const runnerFiles = detail.projectState?.files;
+      if (Array.isArray(runnerFiles) && runnerFiles.length > 0) {
+        for (const rf of runnerFiles) {
+          await projectService.saveProjectFile(channel.id, rf, undefined, { name: 'Swarm IA' }).catch(() => {});
+        }
+      }
+
       setProjectState((prev) => ({
         ...prev,
         actionPlan: detail.plan || prev.actionPlan,
@@ -180,22 +206,36 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
         // If files were created or updated, merge them into project files!
         if (Array.isArray(result.files) && result.files.length > 0) {
           const currentFiles = [...projectState.files];
-          result.files.forEach((newFile: ProjectFile) => {
+          for (const newFile of result.files) {
             const existingIdx = currentFiles.findIndex(
               (f) => f.name.toLowerCase() === newFile.name.toLowerCase()
             );
+            const existingFile = existingIdx >= 0 ? currentFiles[existingIdx] : undefined;
+            const fileToSave: ProjectFile = existingFile
+              ? {
+                  ...existingFile,
+                  content: newFile.content,
+                  language: newFile.language || existingFile.language,
+                  description: newFile.description || existingFile.description,
+                  updatedAt: Date.now(),
+                  version: (existingFile.version || 1) + 1,
+                  updatedBy: result.agent?.name || 'Agente IA',
+                }
+              : newFile;
+
+            await projectService.saveProjectFile(
+              channel.id,
+              fileToSave,
+              existingFile?.version,
+              currentUser || { name: result.agent?.name || 'Agente IA' }
+            );
+
             if (existingIdx >= 0) {
-              currentFiles[existingIdx] = {
-                ...currentFiles[existingIdx],
-                content: newFile.content,
-                updatedAt: Date.now(),
-                version: currentFiles[existingIdx].version + 1,
-                updatedBy: result.agent?.name || 'Agente IA',
-              };
+              currentFiles[existingIdx] = fileToSave;
             } else {
-              currentFiles.push(newFile);
+              currentFiles.push(fileToSave);
             }
-          });
+          }
 
           handleUpdateState({
             files: currentFiles,

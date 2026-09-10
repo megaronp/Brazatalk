@@ -5,6 +5,8 @@
  * Analyzes audio levels for both local and remote streams in real-time to highlight active speakers.
  */
 
+import { auth } from './firebase';
+
 const getIceServers = (): RTCConfiguration => {
   const servers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -13,19 +15,6 @@ const getIceServers = (): RTCConfiguration => {
     { urls: 'stun:stun3.l.google.com:19302' },
     { urls: 'stun:stun4.l.google.com:19302' },
   ];
-
-  // Optional Coturn TURN relay server support (configurable for VPS/production NAT traversal)
-  const turnUrl = (import.meta as any).env?.VITE_TURN_URL;
-  const turnUser = (import.meta as any).env?.VITE_TURN_USERNAME;
-  const turnCredential = (import.meta as any).env?.VITE_TURN_CREDENTIAL;
-
-  if (turnUrl) {
-    servers.push({
-      urls: turnUrl,
-      username: turnUser || undefined,
-      credential: turnCredential || undefined,
-    });
-  }
 
   return {
     iceServers: servers,
@@ -95,6 +84,27 @@ class WebRTCService {
   private isLocalSpeaking: boolean = false;
   private localQuietTimer: NodeJS.Timeout | null = null;
   private analysisInterval: NodeJS.Timeout | null = null;
+  private activeIceConfig: RTCConfiguration = ICE_SERVERS;
+
+  public async fetchIceConfig(): Promise<RTCConfiguration> {
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      const res = await fetch('/api/webrtc/ice-servers', {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.iceServers) && data.iceServers.length > 0) {
+          this.activeIceConfig = {
+            iceServers: data.iceServers,
+            iceCandidatePoolSize: 10,
+          };
+          return this.activeIceConfig;
+        }
+      }
+    } catch {}
+    return this.activeIceConfig;
+  }
 
   constructor() {
     try {
@@ -227,6 +237,8 @@ class WebRTCService {
     this.sendSignalFn = sendSignal;
     this.isMutedState = false;
     this.isDeafenedState = false;
+
+    await this.fetchIceConfig();
 
     try {
       const audioConstraints: MediaTrackConstraints = {
@@ -529,7 +541,7 @@ class WebRTCService {
   }
 
   private createPeerConnection(peerId: string): RTCPeerConnection {
-    const pc = new RTCPeerConnection(ICE_SERVERS);
+    const pc = new RTCPeerConnection(this.activeIceConfig || ICE_SERVERS);
 
     // Add transceivers with high quality audio parameters
     try {
