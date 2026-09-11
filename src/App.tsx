@@ -23,6 +23,7 @@ import { InviteModal } from './components/Modals/InviteModal';
 import { ExploreServersModal } from './components/Modals/ExploreServersModal';
 import { AuthModal } from './components/Modals/AuthModal';
 import { ManageChannelModal } from './components/Modals/ManageChannelModal';
+import { NotificationsModal, AppNotification } from './components/Modals/NotificationsModal';
 import { OfflineBanner } from './components/Common/OfflineBanner';
 import { PWAInstallBanner } from './components/Common/PWAInstallBanner';
 import { NotificationToast } from './components/Common/NotificationToast';
@@ -172,6 +173,21 @@ export default function App() {
     open: false,
   });
   const [showExploreModal, setShowExploreModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>([
+    {
+      id: 'braza-welcome-news',
+      type: 'news',
+      title: 'Bem-vindo ao Braza Talk!',
+      message: 'Áudio espacial de ultra-baixa latência Opus, salas de voz protegidas, WebRTC P2P e compartilhamento de tela com som integrados.',
+      timestamp: Date.now() - 1000 * 60 * 45,
+      read: false,
+    },
+  ]);
+  const unreadNotificationsCount = useMemo(
+    () => appNotifications.filter((n) => !n.read).length,
+    [appNotifications]
+  );
   const [appInstallerTab, setAppInstallerTab] = useState<'install' | 'update'>('install');
   const [updateInfo, setUpdateInfo] = useState<UpdateState>(updateService.getState());
   const [createModal, setCreateModal] = useState<{ open: boolean; mode: 'server' | 'channel'; categoryId?: string }>({
@@ -707,6 +723,35 @@ export default function App() {
                 : m
             ),
           }))
+        );
+        break;
+      }
+
+      case 'room-invite-received': {
+        soundEngine.playMention();
+        const inviteNotification: AppNotification = {
+          id: data.inviteId || `inv-${Date.now()}`,
+          type: 'invite',
+          title: 'Convite para Sala de Voz',
+          message: `${data.senderName || 'Alguém'} convidou você para a sala #${data.channelName || 'voz'} no servidor ${data.serverName || 'Braza Talk'}.`,
+          timestamp: data.timestamp || Date.now(),
+          read: false,
+          inviteData: {
+            inviteId: data.inviteId,
+            serverId: data.serverId,
+            serverName: data.serverName,
+            channelId: data.channelId,
+            channelName: data.channelName,
+            senderUserId: data.senderUserId,
+            senderName: data.senderName,
+            senderAvatar: data.senderAvatar,
+          },
+        };
+        setAppNotifications((prev) => [inviteNotification, ...prev]);
+        pushNotificationToast(
+          'Convite para Sala',
+          `${data.senderName || 'Um membro'} convidou você para #${data.channelName || 'voz'}`,
+          'mention'
         );
         break;
       }
@@ -1517,6 +1562,8 @@ export default function App() {
           <ServerNav
             servers={servers}
             activeServerId={activeServerId}
+            unreadNotificationsCount={unreadNotificationsCount}
+            onOpenNotifications={() => setShowNotificationsModal(true)}
             onSelectServer={(id) => {
               setActiveServerId(id);
               if (id) {
@@ -1618,6 +1665,8 @@ export default function App() {
               onToggleScreenShare={handleToggleScreenShare}
               onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
               onLeaveVoice={handleLeaveVoiceAndNavigateToGeneral}
+              unreadNotificationsCount={unreadNotificationsCount}
+              onOpenNotifications={() => setShowNotificationsModal(true)}
             />
           ) : (
             <ChatArea
@@ -1637,6 +1686,8 @@ export default function App() {
               onToggleMobileNav={() => setMobileNavOpen(!mobileNavOpen)}
               onOpenInvite={() => setShowInviteModal({ open: true, channelId: currentChannel.id })}
               onOpenManageChannel={() => setManagingChannel(currentChannel)}
+              unreadNotificationsCount={unreadNotificationsCount}
+              onOpenNotifications={() => setShowNotificationsModal(true)}
             />
           )}
 
@@ -1812,6 +1863,31 @@ export default function App() {
           onJoinServer={handleJoinServer}
         />
       )}
+
+      {/* Real-time Notifications & Room Invites Modal */}
+      <NotificationsModal
+        isOpen={showNotificationsModal}
+        onClose={() => setShowNotificationsModal(false)}
+        notifications={appNotifications}
+        onMarkAllAsRead={() => {
+          setAppNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+        }}
+        onClearAll={() => {
+          setAppNotifications([]);
+        }}
+        onDismissNotification={(id) => {
+          setAppNotifications((prev) => prev.filter((n) => n.id !== id));
+        }}
+        onAcceptInvite={(invite) => {
+          if (invite.serverId) {
+            setActiveServerId(invite.serverId);
+          }
+          if (invite.channelId) {
+            setActiveChannelId(invite.channelId);
+            handleJoinVoice(invite.channelId);
+          }
+        }}
+      />
     </div>
   );
 }

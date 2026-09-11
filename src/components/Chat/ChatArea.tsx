@@ -16,6 +16,7 @@ import {
   UserCheck,
   Download,
   Settings,
+  Bell,
 } from 'lucide-react';
 import { MessageItem } from './MessageItem';
 import { ChatInput } from './ChatInput';
@@ -39,6 +40,8 @@ interface ChatAreaProps {
   onToggleMobileNav?: () => void;
   onOpenInvite?: () => void;
   onOpenManageChannel?: () => void;
+  onOpenNotifications?: () => void;
+  unreadNotificationsCount?: number;
 }
 
 export const ChatArea: React.FC<ChatAreaProps> = ({
@@ -55,6 +58,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   onToggleMobileNav,
   onOpenInvite,
   onOpenManageChannel,
+  onOpenNotifications,
+  unreadNotificationsCount = 0,
 }) => {
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -228,6 +233,31 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
               <Search className="w-3.5 h-3.5 absolute right-2 text-slate-500 pointer-events-none" />
             )}
           </div>
+
+          {/* Notifications & Room Invites */}
+          {onOpenNotifications && (
+            <button
+              id="btn-chat-notifications-header"
+              onClick={onOpenNotifications}
+              title={
+                unreadNotificationsCount > 0
+                  ? `${unreadNotificationsCount} aviso(s) ou convite(s) pendente(s)`
+                  : 'Avisos & Convites'
+              }
+              className={`relative p-1.5 rounded-lg transition-colors ${
+                unreadNotificationsCount > 0
+                  ? 'text-orange-400 bg-orange-500/15 hover:bg-orange-500/25 border border-orange-500/30'
+                  : 'hover:bg-white/[0.06] hover:text-slate-200 text-slate-400'
+              }`}
+            >
+              <Bell className="w-4 h-4" />
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-0.5 bg-gradient-to-r from-red-500 to-orange-500 rounded-full text-[9px] font-extrabold text-white flex items-center justify-center shadow-md animate-pulse">
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Member List Toggle */}
           <button

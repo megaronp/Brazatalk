@@ -1,24 +1,28 @@
 import React, { useState, useEffect } from 'react';
 import { Server } from '../../types';
-import { Plus, Compass, Download, ShieldCheck, Flame, RefreshCw } from 'lucide-react';
+import { Plus, Compass, Download, ShieldCheck, Flame, RefreshCw, Bell } from 'lucide-react';
 import { updateService, UpdateState } from '../../services/updateService';
 
 interface ServerNavProps {
   servers: Server[];
   activeServerId: string | null;
+  unreadNotificationsCount?: number;
   onSelectServer: (id: string | null) => void;
   onOpenCreateServer: () => void;
   onOpenInstaller: () => void;
   onOpenExplore?: () => void;
+  onOpenNotifications?: () => void;
 }
 
 export const ServerNav: React.FC<ServerNavProps> = ({
   servers,
   activeServerId,
+  unreadNotificationsCount = 0,
   onSelectServer,
   onOpenCreateServer,
   onOpenInstaller,
   onOpenExplore,
+  onOpenNotifications,
 }) => {
   const [updateState, setUpdateState] = useState<UpdateState>(updateService.getState());
 
@@ -125,6 +129,32 @@ export const ServerNav: React.FC<ServerNavProps> = ({
       </div>
 
       <div className="w-8 h-[1.5px] bg-white/[0.08] rounded-full my-1 mt-auto" />
+
+      {/* Notifications & Invites Button */}
+      <div className="relative group flex items-center justify-center w-full mb-1">
+        <button
+          id="btn-open-notifications-nav"
+          onClick={onOpenNotifications}
+          title={
+            unreadNotificationsCount > 0
+              ? `${unreadNotificationsCount} aviso(s) ou convite(s) pendente(s)`
+              : 'Avisos & Convites de Sala'
+          }
+          className={`w-12 h-12 rounded-[22px] flex items-center justify-center transition-all duration-300 cursor-pointer relative ${
+            unreadNotificationsCount > 0
+              ? 'bg-gradient-to-br from-orange-500 to-amber-600 text-white shadow-lg shadow-orange-500/30 ring-2 ring-orange-400/50'
+              : 'bg-[#12141d] text-slate-400 hover:rounded-[16px] hover:bg-orange-500/20 hover:text-orange-400 border border-white/[0.04]'
+          }`}
+        >
+          <Bell className={`w-5 h-5 ${unreadNotificationsCount > 0 ? 'animate-bounce' : ''}`} />
+
+          {unreadNotificationsCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-gradient-to-r from-red-500 to-orange-500 border-2 border-[#07080c] rounded-full text-[10px] font-extrabold text-white flex items-center justify-center shadow-md animate-pulse">
+              {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+            </span>
+          )}
+        </button>
+      </div>
 
       {/* Installer & PWA Download Button */}
       <div className="relative group flex items-center justify-center w-full mb-1">

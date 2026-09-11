@@ -441,24 +441,28 @@ wss.on('connection', (ws) => {
               return;
             }
           } else if (msg.userId) {
-            // Unauthenticated guest identity is isolated with prefix
-            verifiedUserId = msg.userId.startsWith('guest-') ? msg.userId : `guest-${msg.userId}`;
+            // Keep user-provided ID consistent across client and server
+            verifiedUserId = msg.userId;
           } else {
             verifiedUserId = `guest-${clientId}`;
           }
 
-          const oldClientId = clientId;
-          clientId = verifiedUserId;
-          if (oldClientId !== clientId) {
-            clients.delete(oldClientId);
+          // Maintain stable connection ID in clients map without deleting or re-keying
+          const existingClient = clients.get(clientId);
+          if (existingClient) {
+            existingClient.userId = verifiedUserId;
+            existingClient.userName = verifiedUserName;
+            existingClient.userAvatar = verifiedAvatar;
+            if (msg.channelId) existingClient.currentChannelId = msg.channelId;
+          } else {
+            clients.set(clientId, {
+              ws,
+              userId: verifiedUserId,
+              userName: verifiedUserName,
+              userAvatar: verifiedAvatar,
+              currentChannelId: msg.channelId,
+            });
           }
-          clients.set(clientId, {
-            ws,
-            userId: verifiedUserId,
-            userName: verifiedUserName,
-            userAvatar: verifiedAvatar,
-            currentChannelId: msg.channelId,
-          });
 
           // Confirm authentication success to client
           ws.send(JSON.stringify({
@@ -641,10 +645,33 @@ wss.on('connection', (ws) => {
         case 'start-screen-share': {
           const client = clients.get(clientId);
           const effectiveUserId = client?.userId || clientId;
-          if (client) client.isScreenSharing = true;
+          if (client) {
+            client.isScreenSharing = true;
+            if (msg.channelId) client.currentChannelId = msg.channelId;
+          }
 
-          const p = voiceParticipants.get(effectiveUserId);
-          if (p) p.isScreenSharing = true;
+          let p = voiceParticipants.get(effectiveUserId);
+          if (!p && msg.userId) p = voiceParticipants.get(msg.userId);
+
+          if (p) {
+            p.isScreenSharing = true;
+          } else {
+            // Retain participant in voiceParticipants so broadcast sync preserves them
+            const newP: ServerVoiceParticipant = {
+              userId: effectiveUserId,
+              userName: client?.userName || msg.userName || 'Membro',
+              userAvatar: client?.userAvatar || msg.userAvatar,
+              channelId: msg.channelId,
+              isMuted: client?.isMuted || false,
+              isDeafened: client?.isDeafened || false,
+              isSpeaking: false,
+              isScreenSharing: true,
+              isCameraOn: false,
+              viewers: [],
+              joinedAt: Date.now(),
+            };
+            voiceParticipants.set(effectiveUserId, newP);
+          }
 
           broadcast({
             type: 'screen-share-started',
@@ -666,7 +693,8 @@ wss.on('connection', (ws) => {
           const effectiveUserId = client?.userId || clientId;
           if (client) client.isScreenSharing = false;
 
-          const p = voiceParticipants.get(effectiveUserId);
+          let p = voiceParticipants.get(effectiveUserId);
+          if (!p && msg.userId) p = voiceParticipants.get(msg.userId);
           if (p) p.isScreenSharing = false;
 
           broadcast({
@@ -704,7 +732,10 @@ wss.on('connection', (ws) => {
           if (msg.toUserId) {
             let delivered = false;
             clients.forEach((c) => {
-              if (c.userId === msg.toUserId && c.ws.readyState === WebSocket.OPEN) {
+              const matches =
+                c.userId === msg.toUserId ||
+                c.userId?.replace(/^guest-/, '') === msg.toUserId?.replace(/^guest-/, '');
+              if (matches && c.ws.readyState === WebSocket.OPEN) {
                 c.ws.send(JSON.stringify({
                   type: 'webrtc-signal',
                   channelId: msg.channelId,
@@ -730,6 +761,37 @@ wss.on('connection', (ws) => {
               toUserId: msg.toUserId,
               signal: msg.signal,
             }, ws);
+          }
+          break;
+        }
+
+        case 'server-invite': {
+          const client = clients.get(clientId);
+          const senderUserId = client?.userId || msg.senderUserId || clientId;
+          const targetUserId = msg.targetUserId;
+
+          if (targetUserId) {
+            clients.forEach((c) => {
+              const matches =
+                c.userId === targetUserId ||
+                c.userId?.replace(/^guest-/, '') === targetUserId?.replace(/^guest-/, '');
+              if (matches && c.ws.readyState === WebSocket.OPEN) {
+                c.ws.send(
+                  JSON.stringify({
+                    type: 'room-invite-received',
+                    inviteId: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                    senderUserId,
+                    senderName: msg.senderName || client?.userName || 'Membro',
+                    senderAvatar: client?.userAvatar || msg.senderAvatar,
+                    serverName: msg.serverName || 'Servidor',
+                    serverId: msg.serverId,
+                    channelId: msg.channelId,
+                    channelName: msg.channelName,
+                    timestamp: Date.now(),
+                  })
+                );
+              }
+            });
           }
           break;
         }
@@ -803,32 +865,45 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     const client = clients.get(clientId);
     const participantUserId = client?.userId || clientId;
-    const p = voiceParticipants.get(participantUserId);
-    const channelId = client?.currentChannelId || p?.channelId;
-
-    if (channelId && participantUserId) {
-      removeUserFilePresence(channelId, participantUserId);
-      broadcastToChannel(channelId, {
-        type: 'file-presence-sync',
-        channelId,
-        presence: getChannelPresenceSummary(channelId),
-      });
-    }
-
-    if (p || channelId) {
-      voiceParticipants.delete(participantUserId);
-      broadcast({
-        type: 'voice-user-left',
-        channelId,
-        userId: participantUserId,
-        userName: client?.userName || p?.userName,
-      });
-      broadcast({
-        type: 'voice-participants-sync',
-        participants: Array.from(voiceParticipants.values()),
-      });
-    }
+    const channelId = client?.currentChannelId;
     clients.delete(clientId);
+
+    if (participantUserId) {
+      // Check if user still has ANY OTHER active sockets connected
+      let hasOtherActiveSocket = false;
+      for (const [, c] of clients.entries()) {
+        if (c.userId === participantUserId && c.ws.readyState === WebSocket.OPEN) {
+          hasOtherActiveSocket = true;
+          break;
+        }
+      }
+
+      if (!hasOtherActiveSocket) {
+        if (channelId) {
+          removeUserFilePresence(channelId, participantUserId);
+          broadcastToChannel(channelId, {
+            type: 'file-presence-sync',
+            channelId,
+            presence: getChannelPresenceSummary(channelId),
+          });
+        }
+
+        const p = voiceParticipants.get(participantUserId);
+        if (p) {
+          voiceParticipants.delete(participantUserId);
+          broadcast({
+            type: 'voice-user-left',
+            channelId: p.channelId || channelId,
+            userId: participantUserId,
+            userName: client?.userName || p?.userName,
+          });
+          broadcast({
+            type: 'voice-participants-sync',
+            participants: Array.from(voiceParticipants.values()),
+          });
+        }
+      }
+    }
   });
 });
 

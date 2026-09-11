@@ -7,11 +7,13 @@ import {
   createUserWithEmailAndPassword, 
   sendPasswordResetEmail,
   updateProfile,
+  linkWithCredential,
   db,
   doc,
   setDoc,
   getDoc
 } from '../../services/firebase';
+import { GoogleAuthProvider, AuthCredential } from 'firebase/auth';
 import { Flame, Mail, Lock, User as UserIcon, Shield, ArrowRight, Sparkles, CheckCircle2, AlertCircle, KeyRound, ArrowLeft } from 'lucide-react';
 
 interface AuthModalProps {
@@ -26,6 +28,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [resetSuccessMessage, setResetSuccessMessage] = useState<string | null>(null);
+  const [pendingGoogleCredential, setPendingGoogleCredential] = useState<AuthCredential | null>(null);
 
   const isRegister = mode === 'register';
   const isForgotPassword = mode === 'forgot_password';
@@ -56,7 +59,29 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
       }
     } catch (err: any) {
       console.error('Google Sign In Error:', err);
-      setError(err.message || 'Erro ao autenticar com o Google.');
+      if (err.code === 'auth/account-exists-with-different-credential') {
+        const pendingEmail = err.customData?.email || err.email || '';
+        try {
+          const cred = GoogleAuthProvider.credentialFromError(err);
+          if (cred) setPendingGoogleCredential(cred);
+        } catch {}
+
+        if (pendingEmail) setEmail(pendingEmail);
+        setMode('login');
+        setError(
+          `O e-mail ${pendingEmail ? `(${pendingEmail}) ` : ''}já foi cadastrado anteriormente com senha. Digite sua senha abaixo para entrar e vincular sua conta Google.`
+        );
+      } else if (err.code === 'auth/email-already-in-use') {
+        setError('Este e-mail já está em uso por uma conta existente. Digite sua senha para entrar.');
+        setMode('login');
+      } else if (err.code === 'auth/popup-closed-by-user') {
+        // User voluntarily closed popup; no error needed
+        setError(null);
+      } else if (err.code === 'auth/popup-blocked') {
+        setError('O navegador bloqueou a janela do Google. Permita pop-ups para esta página.');
+      } else {
+        setError(err.message || 'Erro ao autenticar com o Google.');
+      }
     } finally {
       setLoading(false);
     }
@@ -141,12 +166,22 @@ export const AuthModal: React.FC<AuthModalProps> = ({ onSuccess }) => {
             updatedAt: Date.now(),
           });
         }
+        // If a Google sign-in was in progress with this email, link the credential now
+        if (pendingGoogleCredential) {
+          try {
+            await linkWithCredential(res.user, pendingGoogleCredential);
+            setPendingGoogleCredential(null);
+          } catch (linkErr) {
+            console.warn('Could not link Google credential automatically:', linkErr);
+          }
+        }
       }
       onSuccess?.();
     } catch (err: any) {
       console.error('Email Auth Error:', err);
       if (err.code === 'auth/email-already-in-use') {
-        setError('Este e-mail já está cadastrado. Faça login.');
+        setError('Este e-mail já está cadastrado. Digite sua senha para entrar ou acesse via Google.');
+        setMode('login');
       } else if (err.code === 'auth/wrong-password' || err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential') {
         setError('E-mail ou senha incorretos.');
       } else if (err.code === 'auth/weak-password') {

@@ -20,6 +20,7 @@ import {
   Pin,
   Check,
   Eye,
+  Bell,
 } from 'lucide-react';
 import { soundEngine } from '../../services/soundEngine';
 import { webrtcService } from '../../services/webrtcService';
@@ -39,6 +40,8 @@ interface VoiceRoomStageProps {
   onToggleScreenShare?: () => void;
   onOpenInvite?: () => void;
   onLeaveVoice?: () => void;
+  onOpenNotifications?: () => void;
+  unreadNotificationsCount?: number;
 }
 
 interface LiveStreamVideoProps {
@@ -141,6 +144,8 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
   onToggleScreenShare,
   onOpenInvite,
   onLeaveVoice,
+  onOpenNotifications,
+  unreadNotificationsCount = 0,
 }) => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const stageContainerRef = useRef<HTMLDivElement | null>(null);
@@ -326,6 +331,30 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
             >
               <UserPlus className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">Convidar</span>
+            </button>
+          )}
+
+          {onOpenNotifications && (
+            <button
+              id="btn-stage-notifications"
+              onClick={onOpenNotifications}
+              title={
+                unreadNotificationsCount > 0
+                  ? `${unreadNotificationsCount} aviso(s) ou convite(s) pendente(s)`
+                  : 'Avisos & Convites'
+              }
+              className={`relative p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer border ${
+                unreadNotificationsCount > 0
+                  ? 'bg-orange-500/20 text-orange-400 border-orange-500/40 hover:bg-orange-500/30'
+                  : 'bg-[#181c2b] text-slate-300 hover:text-white border-white/[0.06]'
+              }`}
+            >
+              <Bell className="w-4 h-4" />
+              {unreadNotificationsCount > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-0.5 bg-gradient-to-r from-red-500 to-orange-500 rounded-full text-[9px] font-extrabold text-white flex items-center justify-center shadow-md animate-pulse">
+                  {unreadNotificationsCount > 9 ? '9+' : unreadNotificationsCount}
+                </span>
+              )}
             </button>
           )}
 

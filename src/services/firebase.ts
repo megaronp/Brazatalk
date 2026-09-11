@@ -15,6 +15,7 @@ import {
   signOut, 
   onAuthStateChanged,
   updateProfile,
+  linkWithCredential,
   User as FirebaseUser
 } from 'firebase/auth';
 import { 
@@ -66,6 +67,7 @@ export {
   signOut,
   onAuthStateChanged,
   updateProfile,
+  linkWithCredential,
   collection,
   doc,
   setDoc,

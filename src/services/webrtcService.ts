@@ -85,6 +85,12 @@ class WebRTCService {
   private localQuietTimer: NodeJS.Timeout | null = null;
   private analysisInterval: NodeJS.Timeout | null = null;
   private activeIceConfig: RTCConfiguration = ICE_SERVERS;
+  private makingOffer: Map<string, boolean> = new Map();
+  private disconnectTimers: Map<string, NodeJS.Timeout> = new Map();
+
+  private isPolite(peerId: string): boolean {
+    return this.currentUserId > peerId;
+  }
 
   public async fetchIceConfig(): Promise<RTCConfiguration> {
     try {
@@ -444,14 +450,18 @@ class WebRTCService {
    * Initiates an outgoing WebRTC offer to a new peer
    */
   public async initiateConnection(peerId: string): Promise<void> {
-    if (this.peers.has(peerId)) {
+    if (!peerId || peerId === this.currentUserId) return;
+
+    let pc = this.peers.get(peerId);
+    if (!pc) {
+      pc = this.createPeerConnection(peerId);
+      this.peers.set(peerId, pc);
+    } else if (pc.signalingState !== 'stable') {
       return;
     }
 
-    const pc = this.createPeerConnection(peerId);
-    this.peers.set(peerId, pc);
-
     try {
+      this.makingOffer.set(peerId, true);
       const offer = await pc.createOffer();
       if (offer.sdp) {
         offer.sdp = optimizeOpusSdp(offer.sdp);
@@ -464,14 +474,16 @@ class WebRTCService {
       });
     } catch (e) {
       console.error(`Failed to create offer for peer ${peerId}:`, e);
+    } finally {
+      this.makingOffer.set(peerId, false);
     }
   }
 
   /**
-   * Handles incoming signaling messages forwarded from WebSocket
+   * Handles incoming signaling messages forwarded from WebSocket with Perfect Negotiation
    */
   public async handleSignal(fromUserId: string, signal: any): Promise<void> {
-    if (!signal || fromUserId === this.currentUserId) return;
+    if (!signal || !fromUserId || fromUserId === this.currentUserId) return;
 
     let pc = this.peers.get(fromUserId);
 
@@ -482,6 +494,19 @@ class WebRTCService {
       }
 
       try {
+        const isPolite = this.isPolite(fromUserId);
+        const isMakingOffer = Boolean(this.makingOffer.get(fromUserId));
+        const offerCollision = isMakingOffer || pc.signalingState !== 'stable';
+
+        if (offerCollision) {
+          if (!isPolite) {
+            // Impolite peer ignores incoming offer when colliding
+            return;
+          }
+          // Polite peer rolls back local description to yield to remote offer
+          await pc.setLocalDescription({ type: 'rollback' });
+        }
+
         const remoteDesc = new RTCSessionDescription(signal.sdp);
         await pc.setRemoteDescription(remoteDesc);
 
@@ -510,16 +535,18 @@ class WebRTCService {
     } else if (signal.type === 'answer') {
       if (pc) {
         try {
-          const remoteDesc = new RTCSessionDescription(signal.sdp);
-          await pc.setRemoteDescription(remoteDesc);
+          if (pc.signalingState === 'have-local-offer') {
+            const remoteDesc = new RTCSessionDescription(signal.sdp);
+            await pc.setRemoteDescription(remoteDesc);
 
-          const queued = this.pendingCandidates.get(fromUserId) || [];
-          for (const cand of queued) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(cand));
-            } catch {}
+            const queued = this.pendingCandidates.get(fromUserId) || [];
+            for (const cand of queued) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(cand));
+              } catch {}
+            }
+            this.pendingCandidates.delete(fromUserId);
           }
-          this.pendingCandidates.delete(fromUserId);
         } catch (e) {
           console.error(`Error handling answer from ${fromUserId}:`, e);
         }
@@ -638,7 +665,24 @@ class WebRTCService {
     };
 
     pc.oniceconnectionstatechange = () => {
-      if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+      const state = pc.iceConnectionState;
+      if (state === 'disconnected') {
+        if (!this.disconnectTimers.has(peerId)) {
+          const timer = setTimeout(() => {
+            if (pc.iceConnectionState === 'disconnected') {
+              this.closePeer(peerId);
+            }
+            this.disconnectTimers.delete(peerId);
+          }, 6000);
+          this.disconnectTimers.set(peerId, timer);
+        }
+      } else if (state === 'connected' || state === 'completed') {
+        const timer = this.disconnectTimers.get(peerId);
+        if (timer) {
+          clearTimeout(timer);
+          this.disconnectTimers.delete(peerId);
+        }
+      } else if (state === 'failed') {
         this.closePeer(peerId);
       }
     };
@@ -685,28 +729,44 @@ class WebRTCService {
     this.localVideoStream = screenStream;
     const videoTrack = screenStream ? screenStream.getVideoTracks()[0] : null;
 
-    for (const pc of this.peers.values()) {
-      const senders = pc.getSenders();
-      const videoSender = senders.find((s) => s.track?.kind === 'video');
+    for (const [peerId, pc] of this.peers.entries()) {
+      try {
+        const senders = pc.getSenders();
+        const videoSender = senders.find((s) => s.track?.kind === 'video' || (s.track === null && !s.track));
+        const videoTransceiver = pc.getTransceivers().find(
+          (t) => t.receiver.track.kind === 'video' || t.sender === videoSender
+        );
 
-      if (videoTrack) {
-        if (videoSender) {
-          await videoSender.replaceTrack(videoTrack);
+        if (videoTrack) {
+          if (videoTransceiver) {
+            videoTransceiver.direction = 'sendrecv';
+          }
+          if (videoSender) {
+            await videoSender.replaceTrack(videoTrack);
+          } else {
+            pc.addTrack(videoTrack, screenStream!);
+          }
         } else {
-          pc.addTrack(videoTrack, screenStream!);
-          // Re-negotiate
+          if (videoTransceiver) {
+            videoTransceiver.direction = 'recvonly';
+          }
+          if (videoSender) {
+            await videoSender.replaceTrack(null);
+          }
+        }
+
+        // Renegotiate with peer if connection is stable
+        if (pc.signalingState === 'stable') {
+          this.makingOffer.set(peerId, true);
           const offer = await pc.createOffer();
           if (offer.sdp) offer.sdp = optimizeOpusSdp(offer.sdp);
           await pc.setLocalDescription(offer);
-          const peerId = this.getPeerIdForPc(pc);
-          if (peerId) {
-            this.sendSignal(peerId, { type: 'offer', sdp: pc.localDescription });
-          }
+          this.sendSignal(peerId, { type: 'offer', sdp: pc.localDescription });
         }
-      } else {
-        if (videoSender) {
-          await videoSender.replaceTrack(null);
-        }
+      } catch (err) {
+        console.warn(`Renegotiation error with ${peerId}:`, err);
+      } finally {
+        this.makingOffer.set(peerId, false);
       }
     }
   }
@@ -726,6 +786,13 @@ class WebRTCService {
    * Close a specific peer connection
    */
   public closePeer(peerId: string) {
+    const timer = this.disconnectTimers.get(peerId);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(peerId);
+    }
+    this.makingOffer.delete(peerId);
+
     const pc = this.peers.get(peerId);
     if (pc) {
       pc.close();
@@ -757,6 +824,9 @@ class WebRTCService {
    * Clean up entire session when leaving voice channel
    */
   public leaveSession() {
+    this.disconnectTimers.forEach((timer) => clearTimeout(timer));
+    this.disconnectTimers.clear();
+    this.makingOffer.clear();
     if (this.analysisInterval) {
       clearInterval(this.analysisInterval);
       this.analysisInterval = null;
