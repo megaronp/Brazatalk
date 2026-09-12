@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Braza Talk
+GenericName=Voz HD, Chat & Comunidade
+Comment=Plataforma de voz HD, vídeo, compartilhamento de tela e chat em tempo real
+Icon=brazatalk
+Exec=/usr/bin/brazatalk %u
+Terminal=false
+Categories=Network;Chat;InstantMessaging;AudioVideo;VideoConference;
+Keywords=brazatalk;chat;voz;webrtc;discord;comunidade;e2ee;conferencia;
+StartupWMClass=brazatalk
+MimeType=x-scheme-handler/brazatalk;
+Actions=NewWindow;
+
+[Desktop Action NewWindow]
+Name=Nova Janela
+Exec=/usr/bin/brazatalk

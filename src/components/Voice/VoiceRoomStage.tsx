@@ -268,7 +268,7 @@ export const VoiceRoomStage: React.FC<VoiceRoomStageProps> = ({
               <span className="truncate">{channel.name}</span>
               {channel.isE2EE && (
                 <span className="hidden sm:inline text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full font-semibold shrink-0">
-                  E2EE
+                  AES-256
                 </span>
               )}
             </h2>

@@ -3,6 +3,7 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
+import { execSync } from 'child_process';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -2308,10 +2309,45 @@ app.get('/downloads/BrazaTalk-macOS.command', (req, res) => {
   }
 });
 
+const debPackageCache = new Map<string, string>();
+
 app.get('/downloads/brazatalk_2.6.0_all.deb', (req, res) => {
-  const filePath = path.join(process.cwd(), 'public', 'downloads', 'brazatalk_2.6.0_all.deb');
+  const origin = getSafeAppOrigin(req);
   res.setHeader('Content-Type', 'application/vnd.debian.binary-package');
   res.setHeader('Content-Disposition', 'attachment; filename="brazatalk_2.6.0_all.deb"');
+
+  const cachedPath = debPackageCache.get(origin);
+  if (cachedPath && fs.existsSync(cachedPath)) {
+    return res.sendFile(cachedPath);
+  }
+
+  const templateDir = path.join(process.cwd(), 'server', 'deb-template');
+  if (fs.existsSync(templateDir)) {
+    try {
+      const originKey = crypto.createHash('md5').update(origin).digest('hex').slice(0, 12);
+      const tempBuildDir = path.join('/tmp', `deb_build_${originKey}`);
+      const outDebPath = path.join('/tmp', `brazatalk_${originKey}.deb`);
+
+      execSync(`rm -rf "${tempBuildDir}" && cp -r "${templateDir}" "${tempBuildDir}"`);
+      
+      const launcherPath = path.join(tempBuildDir, 'usr', 'bin', 'brazatalk');
+      if (fs.existsSync(launcherPath)) {
+        let launcherContent = fs.readFileSync(launcherPath, 'utf-8');
+        launcherContent = launcherContent.replace('APP_ORIGIN_PLACEHOLDER', origin);
+        fs.writeFileSync(launcherPath, launcherContent, { mode: 0o755 });
+      }
+
+      execSync(`dpkg-deb -b "${tempBuildDir}" "${outDebPath}"`);
+      execSync(`rm -rf "${tempBuildDir}"`);
+
+      debPackageCache.set(origin, outDebPath);
+      return res.sendFile(outDebPath);
+    } catch (err) {
+      console.warn('Dynamic deb generation failed, falling back to precompiled package:', err);
+    }
+  }
+
+  const filePath = path.join(process.cwd(), 'public', 'downloads', 'brazatalk_2.6.0_all.deb');
   return res.sendFile(filePath);
 });
 

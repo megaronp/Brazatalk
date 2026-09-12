@@ -1,0 +1,54 @@
+#!/bin/bash
+# Braza Talk Desktop Native Launcher
+# Suporte a resolução dinâmica de URL por configuração ou ambiente
+
+CONFIG_URL=""
+if [ -n "$1" ]; then
+    APP_URL="$1"
+elif [ -n "$BRAZATALK_URL" ]; then
+    APP_URL="$BRAZATALK_URL"
+elif [ -f "$HOME/.config/brazatalk/url.conf" ]; then
+    CONFIG_URL=$(head -n 1 "$HOME/.config/brazatalk/url.conf" 2>/dev/null | tr -d '\r\n ')
+    [ -n "$CONFIG_URL" ] && APP_URL="$CONFIG_URL"
+elif [ -f "/etc/brazatalk.conf" ]; then
+    CONFIG_URL=$(head -n 1 "/etc/brazatalk.conf" 2>/dev/null | tr -d '\r\n ')
+    [ -n "$CONFIG_URL" ] && APP_URL="$CONFIG_URL"
+fi
+
+if [ -z "$APP_URL" ]; then
+    APP_URL="APP_ORIGIN_PLACEHOLDER"
+fi
+
+# Navegadores baseados em Chromium com suporte ao modo --app
+BROWSERS=(
+    "google-chrome"
+    "google-chrome-stable"
+    "chromium"
+    "chromium-browser"
+    "brave-browser"
+    "microsoft-edge"
+    "microsoft-edge-stable"
+    "vivaldi"
+    "opera"
+)
+
+for browser in "${BROWSERS[@]}"; do
+    if command -v "$browser" >/dev/null 2>&1; then
+        exec "$browser" --app="$APP_URL" --class="brazatalk" --name="Braza Talk" "$@"
+    fi
+done
+
+# Fallback para Firefox
+if command -v firefox >/dev/null 2>&1; then
+    exec firefox --new-window "$APP_URL" "$@"
+fi
+
+# Fallback para xdg-open padrão do sistema
+if command -v xdg-open >/dev/null 2>&1; then
+    exec xdg-open "$APP_URL"
+    exit 0
+fi
+
+echo "Erro: Nenhum navegador web compatível encontrado."
+echo "Por favor, acesse manualmente: $APP_URL"
+exit 1

@@ -97,10 +97,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
           {message.isEncrypted && (
             <span
-              title="Protegido por Criptografia de Ponta a Ponta (E2EE AES-GCM-256)"
+              title="Mensagem cifrada no cliente via Web Crypto API (AES-GCM-256)"
               className="flex items-center gap-1 text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-medium"
             >
-              <Lock className="w-2.5 h-2.5" /> E2EE
+              <Lock className="w-2.5 h-2.5" /> AES-256
             </span>
           )}
 

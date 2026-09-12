@@ -109,7 +109,7 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     if (profile === 'fivem') {
       return [
         '[Sistema] Terminal do Mod inicializado.',
-        '[Sandbox] CFX Engine Mock pronto.',
+        '[Sandbox] Workspace pronto para validação de scripts Lua e manifestos.',
       ];
     }
     return [

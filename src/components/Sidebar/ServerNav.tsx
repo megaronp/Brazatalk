@@ -91,7 +91,7 @@ export const ServerNav: React.FC<ServerNavProps> = ({
 
                 {server.e2eeEnabled && (
                   <div
-                    title="Criptografia E2EE Ativa"
+                    title="Cifra de Canal AES-GCM Ativa"
                     className="absolute bottom-0 right-0 p-0.5 bg-[#090a0f] rounded-tl-md text-emerald-400 border-t border-l border-white/[0.08]"
                   >
                     <ShieldCheck className="w-3 h-3" />

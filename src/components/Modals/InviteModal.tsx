@@ -83,7 +83,7 @@ export const InviteModal: React.FC<InviteModalProps> = ({
 
   const handleShareWhatsApp = () => {
     const text = encodeURIComponent(
-      `🔥 Entre no meu servidor "${server?.name || 'Braza Talk'}" no canal "${currentChannelObj?.name || 'Voz'}"!\nLink de acesso rápido com voz HD sem picotar e E2EE:\n${inviteUrl}`
+      `🔥 Entre no meu servidor "${server?.name || 'Braza Talk'}" no canal "${currentChannelObj?.name || 'Voz'}"!\nLink de acesso rápido com voz HD sem picotar:\n${inviteUrl}`
     );
     window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank');
   };

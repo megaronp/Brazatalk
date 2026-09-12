@@ -44,22 +44,25 @@ if not defined BROWSER_PATH (
 echo Encontrado: %BROWSER_PATH%
 echo.
 
-echo [2/3] Baixando icone do aplicativo...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$iconPath = '%APP_DATA_DIR%\brazatalk.ico'; try { Invoke-WebRequest -Uri '%APP_URL%/icon-192.png' -OutFile '%APP_DATA_DIR%\brazatalk.png' -UseBasicParsing -TimeoutSec 5 } catch {}" >nul 2>&1
+echo [2/3] Baixando icone do aplicativo (.ico)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ico = '%APP_DATA_DIR%\brazatalk.ico'; try { Invoke-WebRequest -Uri '%APP_URL%/brazatalk.ico' -OutFile $ico -UseBasicParsing -TimeoutSec 8 } catch { try { Invoke-WebRequest -Uri '%APP_URL%/favicon.ico' -OutFile $ico -UseBasicParsing -TimeoutSec 5 } catch {} }" >nul 2>&1
 
-echo [3/3] Criando atalhos na Area de Trabalho e Menu Iniciar...
+echo [3/3] Criando atalhos na Area de Trabalho e Menu Iniciar com icone oficial...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ws = New-Object -ComObject WScript.Shell; " ^
+  "$ico = '%APP_DATA_DIR%\brazatalk.ico'; " ^
   "$s1 = $ws.CreateShortcut('%DESKTOP_DIR%\Braza Talk.lnk'); " ^
   "$s1.TargetPath = '%BROWSER_PATH%'; " ^
   "$s1.Arguments = '--app=%APP_URL%'; " ^
   "$s1.Description = 'Braza Talk - Voz HD & Chat em Tempo Real'; " ^
+  "if (Test-Path $ico) { $s1.IconLocation = $ico + ',0'; } " ^
   "$s1.WindowStyle = 1; " ^
   "$s1.Save(); " ^
   "$s2 = $ws.CreateShortcut('%PROGRAMS_DIR%\Braza Talk.lnk'); " ^
   "$s2.TargetPath = '%BROWSER_PATH%'; " ^
   "$s2.Arguments = '--app=%APP_URL%'; " ^
   "$s2.Description = 'Braza Talk - Voz HD & Chat em Tempo Real'; " ^
+  "if (Test-Path $ico) { $s2.IconLocation = $ico + ',0'; } " ^
   "$s2.WindowStyle = 1; " ^
   "$s2.Save();"
 

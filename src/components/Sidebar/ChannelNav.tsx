@@ -123,7 +123,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
           <div className="flex items-center justify-between px-1 mb-2">
             <span className="text-xs font-black uppercase tracking-wider text-slate-300">Mensagens Diretas</span>
             <span className="flex items-center gap-1 text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.5 rounded font-mono font-bold">
-              <ShieldCheck className="w-3 h-3" /> E2EE
+              <ShieldCheck className="w-3 h-3" /> Cifra AES
             </span>
           </div>
           <div className="bg-[#141722] text-slate-400 px-3 py-1.5 rounded-lg text-xs font-semibold flex items-center justify-between border border-white/[0.04]">
@@ -152,7 +152,7 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                     type: 'text',
                     isE2EE: true,
                     isPrivate: true,
-                    topic: `Conversa direta criptografada ponta a ponta (AES-GCM-256) com ${u.name}`,
+                    topic: `Conversa direta cifrada no navegador (AES-GCM-256) com ${u.name}`,
                   });
                 }}
                 className={`w-full flex items-center justify-between px-2.5 py-2 rounded-xl transition-all text-sm font-medium text-left cursor-pointer ${
@@ -181,11 +181,11 @@ export const ChannelNav: React.FC<ChannelNavProps> = ({
                   <div className="truncate min-w-0">
                     <div className="truncate font-semibold text-xs leading-tight">{u.name}</div>
                     <div className="text-[10px] text-slate-400 truncate mt-0.5">
-                      {u.customStatus || 'Protegido por E2EE'}
+                      {u.customStatus || 'Cifra AES-GCM ativa'}
                     </div>
                   </div>
                 </div>
-                <div title="Criptografia de ponta a ponta AES-GCM" className="text-emerald-400/80 shrink-0 ml-1">
+                <div title="Cifra de Canal AES-GCM (256-bit)" className="text-emerald-400/80 shrink-0 ml-1">
                   <Lock className="w-3 h-3" />
                 </div>
               </button>

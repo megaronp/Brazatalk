@@ -255,13 +255,13 @@ export const CreateServerOrChannelModal: React.FC<CreateServerOrChannelModalProp
             </>
           )}
 
-          {/* E2EE Toggle */}
+          {/* Channel Cipher Toggle */}
           <div className="bg-[#141722] p-3.5 rounded-2xl border border-emerald-500/20 flex items-center justify-between">
             <div className="flex items-center gap-2.5">
               <ShieldCheck className="w-5 h-5 text-emerald-400" />
               <div>
-                <h5 className="text-xs font-bold text-white tracking-tight">Criptografia E2EE (AES-GCM-256)</h5>
-                <p className="text-[10px] text-slate-400">Cifra todas as interações localmente no dispositivo.</p>
+                <h5 className="text-xs font-bold text-white tracking-tight">Cifra de Canal AES-GCM (256-bit)</h5>
+                <p className="text-[10px] text-slate-400">Cifra simétrica de mensagens via Web Crypto API nos clientes.</p>
               </div>
             </div>
             <input

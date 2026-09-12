@@ -17,6 +17,8 @@ mkdir -p ~/.local/share/applications
 mkdir -p ~/.local/share/pixmaps
 mkdir -p ~/.local/share/icons/hicolor/512x512/apps
 mkdir -p ~/.local/share/icons/hicolor/scalable/apps
+mkdir -p ~/.config/brazatalk
+echo "$APP_URL" > ~/.config/brazatalk/url.conf
 
 # 1. Baixar o ícone de alta resolução do aplicativo
 ICON_PNG="$HOME/.local/share/icons/hicolor/512x512/apps/brazatalk.png"

@@ -257,15 +257,15 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                   />
                 </div>
 
-                {/* E2EE Master Toggle */}
+                {/* Channel Cipher Master Toggle */}
                 <div className="bg-[#141722] p-4 rounded-2xl border border-emerald-500/20 flex items-center justify-between shadow-md">
                   <div className="flex items-center gap-3">
                     <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
                       <Lock className="w-5 h-5" />
                     </div>
                     <div>
-                      <h4 className="text-sm font-bold text-white tracking-tight">Criptografia de Ponta a Ponta (E2EE)</h4>
-                      <p className="text-xs text-slate-400">Cifra todas as mensagens e transmissões diretamente nos clientes com AES-GCM 256.</p>
+                      <h4 className="text-sm font-bold text-white tracking-tight">Cifra de Canal AES-GCM (256-bit)</h4>
+                      <p className="text-xs text-slate-400">Habilita a cifragem simétrica de mensagens no cliente para canais protegidos deste servidor.</p>
                     </div>
                   </div>
                   <input
@@ -338,7 +338,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                                   </span>
                                   {channel.isE2EE && (
                                     <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-medium">
-                                      E2EE
+                                      AES-256
                                     </span>
                                   )}
                                 </div>

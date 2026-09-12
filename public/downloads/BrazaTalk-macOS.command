@@ -44,9 +44,29 @@ cat << 'PLIST' > "$APP_DIR/Contents/Info.plist"
 </plist>
 PLIST
 
-# 2. Baixar ícone
-echo "-> Baixando ícone oficial..."
+# 2. Baixar ícone oficial (.icns nativo do macOS)
+echo "-> Baixando ícone oficial (.icns)..."
+curl -fsSL "$APP_URL/AppIcon.icns" -o "$APP_DIR/Contents/Resources/AppIcon.icns" 2>/dev/null || true
 curl -fsSL "$APP_URL/icon-512.png" -o "$APP_DIR/Contents/Resources/AppIcon.png" 2>/dev/null || true
+
+# Fallback: Se AppIcon.icns não pôde ser baixado diretamente, converter o PNG via sips e iconutil do macOS
+if [ ! -s "$APP_DIR/Contents/Resources/AppIcon.icns" ] && [ -s "$APP_DIR/Contents/Resources/AppIcon.png" ]; then
+    if command -v sips >/dev/null 2>&1 && command -v iconutil >/dev/null 2>&1; then
+        ICONSET="/tmp/AppIcon_$$.iconset"
+        mkdir -p "$ICONSET"
+        sips -z 16 16     "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_16x16.png" >/dev/null 2>&1 || true
+        sips -z 32 32     "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_16x16@2x.png" >/dev/null 2>&1 || true
+        sips -z 32 32     "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_32x32.png" >/dev/null 2>&1 || true
+        sips -z 64 64     "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_32x32@2x.png" >/dev/null 2>&1 || true
+        sips -z 128 128   "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_128x128.png" >/dev/null 2>&1 || true
+        sips -z 256 256   "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_128x128@2x.png" >/dev/null 2>&1 || true
+        sips -z 256 256   "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_256x256.png" >/dev/null 2>&1 || true
+        sips -z 512 512   "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_256x256@2x.png" >/dev/null 2>&1 || true
+        sips -z 512 512   "$APP_DIR/Contents/Resources/AppIcon.png" --out "$ICONSET/icon_512x512.png" >/dev/null 2>&1 || true
+        iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns" >/dev/null 2>&1 || true
+        rm -rf "$ICONSET"
+    fi
+fi
 
 # 3. Criar executável principal
 cat << SCRIPT > "$APP_DIR/Contents/MacOS/BrazaTalk"

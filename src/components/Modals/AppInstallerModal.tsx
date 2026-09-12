@@ -441,7 +441,7 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                     <div>
                       <h4 className="text-sm font-bold text-white">Aplicativo 100% Atualizado</h4>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Você está utilizando os recursos mais recentes de áudio HD, PWA e criptografia E2EE.
+                        Você está utilizando os recursos mais recentes de áudio HD, PWA e cifra de mensagens AES-GCM.
                       </p>
                     </div>
                   </div>

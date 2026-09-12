@@ -247,7 +247,7 @@ export const ManageChannelModal: React.FC<ManageChannelModalProps> = ({
                 >
                   <span className="flex items-center gap-1.5">
                     <Lock className="w-3.5 h-3.5" />
-                    {isE2EE ? 'E2EE Habilitado' : 'Padrão (Sem E2EE)'}
+                    {isE2EE ? 'Cifra AES-GCM (256-bit) Ativa' : 'Padrão (Sem Cifra de Canal)'}
                   </span>
                   <span className={`w-2 h-2 rounded-full ${isE2EE ? 'bg-emerald-400' : 'bg-slate-600'}`} />
                 </button>

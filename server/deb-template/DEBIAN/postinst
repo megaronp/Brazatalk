@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+# Atualiza banco de dados do menu de aplicativos se disponivel
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database -q /usr/share/applications || true
+fi
+
+# Atualiza cache de icones hicolor se ferramenta existir
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor 2>/dev/null || true
+fi
+
+chmod +x /usr/bin/brazatalk 2>/dev/null || true
+
+echo "============================================================"
+echo " ✓ Braza Talk instalado com sucesso no sistema!"
+echo "   Inicie digitando 'brazatalk' ou abra pelo menu de aplicativos."
+echo "============================================================"
+exit 0

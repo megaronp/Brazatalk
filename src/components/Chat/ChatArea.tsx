@@ -165,16 +165,16 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
           {getChannelIcon()}
           <span className="font-bold text-white text-sm truncate tracking-tight">{channel.name}</span>
 
-          {/* E2EE badge ONLY for 1-on-1 private Direct Messages */}
+          {/* Cipher badge ONLY for 1-on-1 private Direct Messages */}
           {isDirectMessage && (
             <button
               id="btn-channel-e2ee-badge"
               onClick={onOpenE2EESecurityModal}
-              title="Criptografia de Ponta a Ponta Ativa nesta conversa privada. Clique para verificar chaves."
+              title="Cifra de Canal AES-GCM (256-bit) ativa nesta conversa privada. Clique para gerenciar a chave da cifra."
               className="flex items-center gap-1.5 text-[11px] bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 border border-emerald-500/30 px-2.5 py-0.5 rounded-full font-semibold transition-colors cursor-pointer shrink-0 shadow-sm"
             >
               <Lock className="w-3 h-3" />
-              <span>E2EE Ponta a Ponta</span>
+              <span>Cifra AES-GCM (256-bit)</span>
             </button>
           )}
 
@@ -299,7 +299,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             <p className="text-xs text-slate-400 mt-1 max-w-lg leading-relaxed">
               Este é o início do canal #{channel.name}.
               {channel.isE2EE
-                ? ' Todas as conversas nesta sala possuem proteção criptográfica de ponta a ponta AES-GCM 256-bit.'
+                ? ' Todas as conversas nesta sala possuem cifra local no navegador via Web Crypto API (AES-GCM 256-bit).'
                 : ' Converse, compartilhe ideias e utilize os comandos inteligentes dos bots de automação.'}
             </p>
           </div>

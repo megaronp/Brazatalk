@@ -1,0 +1,13 @@
+Package: brazatalk
+Version: 2.6.0
+Section: net
+Priority: optional
+Architecture: all
+Maintainer: Braza Talk <suporte@brazatalk.app>
+Depends: bash, xdg-utils
+Recommends: google-chrome-stable | chromium | brave-browser | firefox
+Homepage: https://brazatalk.app
+Description: Braza Talk - Voz HD, Chat & Comunidade em Tempo Real
+ Plataforma moderna de comunicacao em tempo real com canais de texto,
+ salas de voz/video com baixa latencia, compartilhamento de tela com
+ audio do sistema, criptografia ponta a ponta (E2EE), soundboard e bots.
