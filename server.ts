@@ -2318,12 +2318,6 @@ app.get('/downloads/brazatalk_2.6.0_all.deb', (req, res) => {
 // Fallback for static downloads
 app.use('/downloads', express.static(path.join(process.cwd(), 'public', 'downloads')));
 
-app.post('/api/push-notification', requireAuth, (req, res) => {
-  const { title, body, userId } = req.body;
-  // Push notification simulator/dispatch
-  res.json({ success: true, deliveredAt: Date.now(), title, body, recipient: userId || 'all' });
-});
-
 // Initialize Vite in Dev or Static Serving in Prod
 async function start() {
   if (process.env.NODE_ENV !== 'production') {

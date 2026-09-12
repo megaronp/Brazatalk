@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Channel, Message, MessageAttachment, User } from '../../types';
+import { Channel, Message, MessageAttachment, User, Server } from '../../types';
 import {
   Hash,
   Volume2,
@@ -25,6 +25,7 @@ interface ChatAreaProps {
   channel: Channel;
   messages: Message[];
   currentUser: User;
+  server?: Server | null;
   onSendMessage: (
     content: string,
     isVoiceNote?: boolean,
@@ -48,6 +49,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
   channel,
   messages,
   currentUser,
+  server,
   onSendMessage,
   onReact,
   onPinMessage,
@@ -329,6 +331,7 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
             key={msg.id}
             message={msg}
             currentUser={currentUser}
+            server={server}
             onReact={onReact}
             onReply={(replyMsg) => setReplyingTo(replyMsg)}
             onPin={onPinMessage}
@@ -344,6 +347,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       <ChatInput
         channel={channel}
         replyingTo={replyingTo}
+        currentUser={currentUser}
+        server={server}
         onCancelReply={() => setReplyingTo(null)}
         onSendMessage={(content, isVoice, duration, attachments) => {
           onSendMessage(content, isVoice, duration, attachments);

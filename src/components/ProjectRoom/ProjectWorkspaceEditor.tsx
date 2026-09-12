@@ -315,65 +315,77 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
   const handleRunVerification = () => {
     const profile = projectState.projectProfile || 'generic';
     const logs: string[] = [
-      `[Validação] Analisando integridade de '${projectState.projectName}' (Perfil: ${profile.toUpperCase()})...`,
+      `[Validação Estática] Analisando ${projectState.files.length} arquivo(s) em '${projectState.projectName}' (Perfil: ${profile.toUpperCase()})...`,
     ];
 
     let hasErrors = false;
+    let totalLines = 0;
 
-    // Check JSON files
-    projectState.files
-      .filter((f) => f.language === 'json' || f.name.endsWith('.json'))
-      .forEach((f) => {
+    projectState.files.forEach((f) => {
+      const lines = f.content.split('\n');
+      totalLines += lines.length;
+
+      // Real JSON check
+      if (f.language === 'json' || f.name.endsWith('.json')) {
         try {
           JSON.parse(f.content);
-          logs.push(`[JSON] ✅ ${f.name}: Sintaxe válida.`);
+          logs.push(`[JSON] ✅ ${f.name}: Sintaxe válida (${lines.length} linhas).`);
         } catch (e: any) {
           hasErrors = true;
           logs.push(`[JSON] ❌ ${f.name}: Erro de sintaxe! ${e.message}`);
         }
-      });
-
-    if (profile === 'python') {
-      projectState.files
-        .filter((f) => f.language === 'python' || f.name.endsWith('.py'))
-        .forEach((f) => {
-          const lines = f.content.split('\n');
-          let openParens = 0;
-          lines.forEach((l) => {
-            openParens += (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
-          });
-          if (openParens !== 0) {
-            hasErrors = true;
-            logs.push(`[Python] ❌ ${f.name}: Parênteses não balanceados.`);
-          } else {
-            logs.push(`[Python] ✅ ${f.name}: ${lines.length} linhas verificadas. PEP-8 compatível.`);
-          }
-        });
-      logs.push('[Python VirtualEnv] ⚡ Simulação de imports e módulos concluída.');
-    } else if (profile === 'web') {
-      const hasHtml = projectState.files.some((f) => f.name.endsWith('.html'));
-      if (hasHtml) {
-        logs.push('[Web] ✅ Entry point HTML detectado e pronto para preview no navegador.');
-      } else {
-        logs.push('[Web] ℹ️ Dica: Adicione um index.html para renderização no preview ao vivo.');
       }
-      logs.push('[Build Simulator] 📦 Módulos JS/TS e estilos CSS conferidos com sucesso.');
-    } else if (profile === 'fivem') {
-      projectState.files
-        .filter((f) => f.language === 'lua' || f.name.endsWith('.lua'))
-        .forEach((f) => {
-          const lines = f.content.split('\n');
-          logs.push(`[Lua] ℹ️ ${f.name}: ${lines.length} linhas analisadas. NetEvents verificados.`);
-        });
-      logs.push('[CFX Engine] ⚡ Simulando inicialização do recurso no servidor...');
-    } else {
-      logs.push(`[Workspace] ✅ ${projectState.files.length} arquivos analisados com sucesso.`);
-    }
 
+      // Real HTML check
+      if (f.language === 'html' || f.name.endsWith('.html')) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(f.content, 'text/html');
+        const parserErrors = doc.querySelectorAll('parsererror');
+        if (parserErrors.length > 0) {
+          hasErrors = true;
+          logs.push(`[HTML] ❌ ${f.name}: Erro de estrutura HTML.`);
+        } else {
+          logs.push(`[HTML] ✅ ${f.name}: DOM válido (${lines.length} linhas).`);
+        }
+      }
+
+      // Real JS/TS/Lua bracket balancing check
+      if (['javascript', 'typescript', 'lua'].includes(f.language) || /\.(js|ts|tsx|jsx|lua)$/i.test(f.name)) {
+        let openBraces = 0;
+        let openParens = 0;
+        lines.forEach((l) => {
+          openBraces += (l.match(/\{/g) || []).length - (l.match(/\}/g) || []).length;
+          openParens += (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
+        });
+
+        if (openBraces !== 0 || openParens !== 0) {
+          hasErrors = true;
+          logs.push(`[Sintaxe] ⚠️ ${f.name}: Possível desbalanceamento (${openBraces !== 0 ? 'chaves { }' : ''} ${openParens !== 0 ? 'parênteses ( )' : ''}).`);
+        } else {
+          logs.push(`[Sintaxe] ✅ ${f.name}: Delimitadores balanceados (${lines.length} linhas).`);
+        }
+      }
+
+      // Real Python paren check
+      if (f.language === 'python' || f.name.endsWith('.py')) {
+        let openParens = 0;
+        lines.forEach((l) => {
+          openParens += (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
+        });
+        if (openParens !== 0) {
+          hasErrors = true;
+          logs.push(`[Python] ❌ ${f.name}: Parênteses não balanceados.`);
+        } else {
+          logs.push(`[Python] ✅ ${f.name}: Estrutura verificada (${lines.length} linhas).`);
+        }
+      }
+    });
+
+    logs.push(`[Resumo] Total de ${projectState.files.length} arquivo(s), ${totalLines} linha(s) de código.`);
     logs.push(
       hasErrors
-        ? '[Status] ⚠️ Foram detectados avisos de sintaxe nos arquivos.'
-        : '[Status] ✅ Todos os scripts passaram na análise com sucesso! 0 erros críticos.'
+        ? '[Status] ⚠️ Foram detectados avisos de sintaxe ou delimitadores abertos nos arquivos.'
+        : '[Status] ✅ Todos os arquivos foram validados com sucesso! Nenhum erro crítico detectado.'
     );
 
     setTerminalLogs((prev) => [...prev, ...logs]);
@@ -386,7 +398,6 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     const cmd = terminalInput.trim();
     if (!cmd) return;
 
-    const profile = projectState.projectProfile || 'generic';
     const newLogs = [`> ${cmd}`];
 
     if (cmd === '/clear') {
@@ -396,39 +407,61 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
     }
 
     if (cmd === '/help') {
-      newLogs.push(`[Comandos de Teste - ${profile.toUpperCase()}]:`);
-      if (profile === 'python') {
-        newLogs.push('  /python main.py - Simula execução do script');
-        newLogs.push('  /pytest - Executa suíte de testes unitários');
-      } else if (profile === 'web') {
-        newLogs.push('  /build - Simula compilação do bundle');
-        newLogs.push('  /test - Executa testes da interface');
-      } else if (profile === 'fivem') {
-        newLogs.push('  /spawncar [nome] - Testa spawn do veículo');
-        newLogs.push('  /resmon - Exibe consumo simulado de CPU/ms');
-      } else {
-        newLogs.push('  /run - Executa o binário do projeto');
-        newLogs.push('  /test - Roda testes automatizados');
-      }
-      newLogs.push('  /clear - Limpa o terminal de teste');
-    } else if (profile === 'python' && cmd.startsWith('/python')) {
-      newLogs.push('[Python 3.11] 🐍 Executando processo no sandbox...');
-      newLogs.push('[Output] Processo concluído com código 0 (Execução simulada).');
-    } else if (profile === 'python' && cmd.startsWith('/pytest')) {
-      newLogs.push('[Pytest] 🧪 4 testes passaram em 0.12s. Cobertura: 100%.');
-    } else if (profile === 'web' && cmd.startsWith('/build')) {
-      newLogs.push('[Vite] ⚡ Compilando bundle para produção...');
-      newLogs.push('[Vite] ✅ 14 módulos transformados. dist/index.html gerado.');
-    } else if (profile === 'fivem' && cmd.startsWith('/spawncar')) {
+      newLogs.push('[Console de Diagnóstico & Análise Estática - Comandos Reais]:');
+      newLogs.push('  /check       - Executa verificação sintática em todos os arquivos');
+      newLogs.push('  /files       - Lista todos os arquivos do projeto e tamanhos reais');
+      newLogs.push('  /stats       - Métricas de código (linhas totais, contagem de arquivos)');
+      newLogs.push('  /view [nome] - Inspeciona o conteúdo inicial de um arquivo específico');
+      newLogs.push('  /clear       - Limpa o histórico deste console');
+    } else if (cmd === '/check') {
+      handleRunVerification();
+      setTerminalInput('');
+      return;
+    } else if (cmd === '/files') {
+      newLogs.push(`[Arquivos do Projeto] (${projectState.files.length} arquivos):`);
+      projectState.files.forEach((f) => {
+        const sizeBytes = new Blob([f.content]).size;
+        const lineCount = f.content.split('\n').length;
+        newLogs.push(`  • ${f.name} [${f.language}] - ${lineCount} linhas, ${sizeBytes} bytes`);
+      });
+    } else if (cmd === '/stats') {
+      let totalLines = 0;
+      let totalBytes = 0;
+      const languages: Record<string, number> = {};
+      projectState.files.forEach((f) => {
+        totalLines += f.content.split('\n').length;
+        totalBytes += new Blob([f.content]).size;
+        languages[f.language] = (languages[f.language] || 0) + 1;
+      });
+      newLogs.push(`[Estatísticas de Código de '${projectState.projectName}']:`);
+      newLogs.push(`  • Arquivos totais: ${projectState.files.length}`);
+      newLogs.push(`  • Total de linhas: ${totalLines}`);
+      newLogs.push(`  • Tamanho total: ${(totalBytes / 1024).toFixed(2)} KB`);
+      newLogs.push(`  • Linguagens: ${Object.entries(languages).map(([lang, cnt]) => `${lang} (${cnt})`).join(', ')}`);
+    } else if (cmd.startsWith('/view')) {
       const parts = cmd.split(' ');
-      const car = parts[1] || 'adder';
-      newLogs.push(`[Mock FiveM] 🚗 Executando RegisterCommand('spawncar')...`);
-      newLogs.push(`[Mock FiveM] RequestModel(${car}) -> Carregado.`);
-      newLogs.push(`[Mock FiveM] ✅ Veículo '${car}' gerado com sucesso!`);
-    } else if (profile === 'fivem' && cmd === '/resmon') {
-      newLogs.push(`[Resmon Mock] ${projectState.projectName}: 0.01 ms`);
+      const targetName = parts[1]?.trim();
+      if (!targetName) {
+        newLogs.push('[Console] Uso correto: /view <nome_do_arquivo>');
+      } else {
+        const found = projectState.files.find(
+          (f) => f.name.toLowerCase() === targetName.toLowerCase() || f.name.toLowerCase().includes(targetName.toLowerCase())
+        );
+        if (found) {
+          const previewLines = found.content.split('\n').slice(0, 8);
+          newLogs.push(`[Preview de ${found.name}] (${found.content.split('\n').length} linhas no total):`);
+          previewLines.forEach((l, idx) => {
+            newLogs.push(`  ${idx + 1}: ${l}`);
+          });
+          if (found.content.split('\n').length > 8) {
+            newLogs.push('  ... (abra o arquivo no editor para ver o conteúdo completo)');
+          }
+        } else {
+          newLogs.push(`[Console] Arquivo '${targetName}' não encontrado no projeto.`);
+        }
+      }
     } else {
-      newLogs.push(`[Console] Comando '${cmd}' processado no ambiente virtual.`);
+      newLogs.push(`[Console] Comando '${cmd}' não reconhecido. Digite /help para listar comandos disponíveis.`);
     }
 
     setTerminalLogs((prev) => [...prev, ...newLogs]);
@@ -1066,17 +1099,10 @@ export const ProjectWorkspaceEditor: React.FC<ProjectWorkspaceEditorProps> = ({
                 ))}
               </div>
 
-              {/* Quick test command pills */}
+              {/* Quick diagnostic command pills */}
               <div className="flex items-center gap-1.5 overflow-x-auto py-2 shrink-0">
-                <span className="text-[10px] uppercase font-bold text-slate-500 shrink-0">Atalhos:</span>
-                {(projectState.projectProfile === 'python'
-                  ? ['/python main.py', '/pytest', '/help', '/clear']
-                  : projectState.projectProfile === 'web'
-                  ? ['/build', '/test', '/help', '/clear']
-                  : projectState.projectProfile === 'fivem'
-                  ? ['/spawncar adder', '/resmon', '/help', '/clear']
-                  : ['/run', '/test', '/help', '/clear']
-                ).map((cmd) => (
+                <span className="text-[10px] uppercase font-bold text-slate-500 shrink-0">Comandos:</span>
+                {['/check', '/files', '/stats', '/help', '/clear'].map((cmd) => (
                   <button
                     key={cmd}
                     type="button"

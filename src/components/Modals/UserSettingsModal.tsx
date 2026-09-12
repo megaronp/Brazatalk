@@ -503,7 +503,7 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
                 }`}
               >
                 <Lock className="w-4 h-4" />
-                <span>Segurança E2EE</span>
+                <span>Cifra AES-GCM (Canal)</span>
               </button>
 
               <button
@@ -1234,37 +1234,33 @@ export const UserSettingsModal: React.FC<UserSettingsModalProps> = ({
             </div>
           )}
 
-          {/* ===================== E2EE TAB ===================== */}
+          {/* ===================== AES-GCM CHANNEL CIPHER TAB ===================== */}
           {activeTab === 'e2ee' && (
             <div className="space-y-6 max-w-xl">
               <div>
-                <h3 className="text-lg font-black text-white tracking-tight">Criptografia de Ponta a Ponta (E2EE)</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Chaves de segurança criptográficas locais derivadas no seu navegador.</p>
+                <h3 className="text-lg font-black text-white tracking-tight">Cifra de Canal AES-GCM (256-bit)</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Criptografia simétrica autenticada executada localmente no navegador via Web Crypto API.</p>
               </div>
 
-              <div className="bg-[#121520] p-4 rounded-2xl border border-emerald-500/20 space-y-3 shadow-md">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
-                    <Lock className="w-4 h-4" />
-                    <span>Sua Impressão Digital de Segurança (Fingerprint)</span>
-                  </span>
-
-                  <button
-                    onClick={handleCopyFingerprint}
-                    className="flex items-center gap-1.5 text-xs text-slate-300 bg-[#141722] hover:bg-white/[0.08] px-3 py-1.5 rounded-xl transition-colors border border-white/[0.06] cursor-pointer"
-                  >
-                    {copiedFingerprint ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedFingerprint ? 'Copiado!' : 'Copiar'}</span>
-                  </button>
+              <div className="bg-[#121520] p-4 rounded-2xl border border-emerald-500/20 space-y-4 shadow-md">
+                <div className="flex items-center gap-2 text-xs font-bold text-emerald-400">
+                  <Lock className="w-4 h-4" />
+                  <span>Como funciona a Cifra por Canal no Braza Talk</span>
                 </div>
 
-                <div className="font-mono text-xs tracking-widest text-emerald-300 bg-[#090b10] p-3 rounded-xl border border-emerald-500/30 text-center select-all">
-                  {fingerprint}
+                <div className="space-y-2.5 text-xs text-slate-300 leading-relaxed">
+                  <p>
+                    Quando um canal possui cifra ativada, cada mensagem de texto é criptografada diretamente no seu navegador antes de ser enviada ou persistida no banco de dados.
+                  </p>
+                  <ul className="list-disc list-inside space-y-1 text-slate-400 font-normal">
+                    <li><strong className="text-white">Algoritmo:</strong> AES-GCM com chave de 256 bits e IV único gerado por mensagem.</li>
+                    <li><strong className="text-white">Derivação de Chave:</strong> PBKDF2 com 100.000 iterações e SHA-256 a partir do identificador ou senha do canal.</li>
+                    <li><strong className="text-white">Autenticação:</strong> A cifra AES-GCM garante que o conteúdo não seja adulterado sem que a decriptação falhe.</li>
+                  </ul>
+                  <p className="text-[11px] text-slate-400 bg-white/[0.03] p-3 rounded-xl border border-white/[0.06]">
+                    💡 <em>Nota de Transparência:</em> Trata-se de cifra simétrica por canal com chave compartilhada entre os membros do canal, e não de um esquema assimétrico de chave pública/privada por usuário.
+                  </p>
                 </div>
-
-                <p className="text-[11px] text-slate-400 leading-relaxed font-normal">
-                  Compare estes números com seus amigos em conversas seguras para verificar a integridade da chave E2EE contra ataques de interceptação.
-                </p>
               </div>
             </div>
           )}

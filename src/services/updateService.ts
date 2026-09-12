@@ -115,20 +115,21 @@ class UpdateService {
    */
   public async checkForUpdates(forceSimulateNewVersion: boolean = false): Promise<boolean> {
     this.state.isChecking = true;
-    this.state.statusText = 'Verificando atualizações no servidor...';
+    this.state.statusText = 'Verificando atualizações no Service Worker e servidor...';
     this.notify();
 
     try {
-      // Check service worker for updates if available
+      let swUpdateFound = false;
+      // Check service worker for real updates if available
       if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
         const registration = await navigator.serviceWorker.getRegistration();
         if (registration) {
           await registration.update().catch(() => {});
+          if (registration.waiting) {
+            swUpdateFound = true;
+          }
         }
       }
-
-      // Small network delay simulation
-      await new Promise((resolve) => setTimeout(resolve, 600));
 
       const now = Date.now();
       this.state.lastChecked = now;
@@ -142,27 +143,28 @@ class UpdateService {
         version: APP_LATEST_VERSION,
         releaseDate: new Date().toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' }),
         channel: 'stable',
-        title: 'Versão Turbo: Voice HD 60FPS & Criptografia E2EE V2',
+        title: 'Braza Talk — Versão de Produção Atualizada',
         highlights: [
-          'Suporte completo a PWA offline e instalação rápida em celulares e PCs',
-          'Qualidade de áudio aprimorada com supressão inteligente de ruído WebRTC',
-          'Sincronização offline resiliente e correções de permissões do Firestore',
-          'Atualização transparente OTA com limpeza automática de cache',
+          'Suporte completo a PWA offline e instalação rápida em celulares e computadores',
+          'Qualidade de áudio aprimorada com supressão de ruído WebRTC',
+          'Sincronização offline resiliente com Firestore e cache local IndexedDB',
+          'Atualização de Service Worker com limpeza transparente de cache',
         ],
         mandatory: false,
         buildNumber: 26004,
-        downloadSize: '1.8 MB (Patch diferencial)',
+        downloadSize: 'Cache PWA',
       };
 
       const hasUpdate =
         forceSimulateNewVersion ||
+        swUpdateFound ||
         this.compareVersions(latestRelease.version, this.state.currentVersion) > 0;
 
       if (hasUpdate) {
         this.state.updateAvailable = true;
         this.state.latestVersion = latestRelease.version;
         this.state.releaseInfo = latestRelease;
-        this.state.statusText = `Nova versão v${latestRelease.version} disponível!`;
+        this.state.statusText = `Nova versão v${latestRelease.version} disponível via Service Worker!`;
       } else {
         this.state.updateAvailable = false;
         this.state.latestVersion = latestRelease.version;
@@ -197,26 +199,14 @@ class UpdateService {
   }
 
   /**
-   * Apply OTA Hot Update / Cache Refresh
+   * Apply Service Worker Update & Cache Refresh
    */
   public async performOTAUpdate(onProgress?: (progress: number) => void): Promise<void> {
     this.state.isDownloading = true;
-    this.state.downloadProgress = 0;
-    this.state.statusText = 'Baixando pacote de atualização diferencial...';
+    this.state.downloadProgress = 50;
+    this.state.statusText = 'Atualizando Service Worker e revalidando caches...';
+    onProgress?.(50);
     this.notify();
-
-    // Progress simulation
-    for (let p = 15; p <= 100; p += 20) {
-      await new Promise((r) => setTimeout(r, 180));
-      this.state.downloadProgress = Math.min(p, 100);
-      onProgress?.(this.state.downloadProgress);
-      if (p === 35) {
-        this.state.statusText = 'Verificando integridade e assinaturas E2EE...';
-      } else if (p === 75) {
-        this.state.statusText = 'Aplicando patches e limpando cache anterior...';
-      }
-      this.notify();
-    }
 
     try {
       // Clear cache storage if available
@@ -225,7 +215,7 @@ class UpdateService {
         await Promise.all(cacheKeys.map((key) => window.caches.delete(key)));
       }
 
-      // If Service Worker is registered, update it
+      // If Service Worker is registered, update it and skip waiting
       if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
         const registrations = await navigator.serviceWorker.getRegistrations();
         for (const reg of registrations) {
@@ -241,21 +231,23 @@ class UpdateService {
         localStorage.setItem(STORAGE_KEY_APP_VERSION, this.state.latestVersion || APP_LATEST_VERSION);
       }
     } catch (e) {
-      console.warn('Cache clearing error during update:', e);
+      console.warn('Cache revalidation error during update:', e);
     }
 
+    this.state.downloadProgress = 100;
+    onProgress?.(100);
     this.state.currentVersion = this.state.latestVersion || APP_LATEST_VERSION;
     this.state.updateAvailable = false;
     this.state.isDownloading = false;
     this.state.statusText = 'Atualização concluída com sucesso! Recarregando...';
     this.notify();
 
-    // Short delay before reload to let user see success state
+    // Reload cleanly to activate new Service Worker & assets
     setTimeout(() => {
       if (typeof window !== 'undefined') {
         window.location.reload();
       }
-    }, 1000);
+    }, 400);
   }
 
   /**

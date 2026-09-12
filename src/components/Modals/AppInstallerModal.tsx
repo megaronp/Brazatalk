@@ -280,10 +280,10 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
               <div>
                 <div className="flex items-center justify-between mb-2.5">
                   <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                    Pacotes Desktop Nativos (Sem Mockup)
+                    Inicializadores & Atalhos Desktop Nativos
                   </h3>
                   <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                    Arquivos Reais
+                    Inicializadores Reais
                   </span>
                 </div>
 
@@ -315,7 +315,7 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   <div className="bg-[#141722] border border-white/[0.08] hover:border-indigo-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md">
                     <Monitor className="w-7 h-7 sm:w-8 sm:h-8 text-indigo-400 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
                     <span className="text-sm font-bold text-white tracking-tight">Windows</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">Windows 10 / 11 (Desktop Setup)</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">Windows 10 / 11 (Atalho App)</span>
                     <div className="w-full space-y-1.5 mt-2.5 sm:mt-3">
                       <button
                         id="btn-download-windows"
@@ -337,7 +337,7 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   <div className="bg-[#141722] border border-white/[0.08] hover:border-emerald-500/50 p-3.5 sm:p-4 rounded-2xl flex flex-col items-center text-center transition-all group shadow-md">
                     <Apple className="w-7 h-7 sm:w-8 sm:h-8 text-slate-200 mb-1.5 sm:mb-2 group-hover:scale-110 transition-transform" />
                     <span className="text-sm font-bold text-white tracking-tight">macOS</span>
-                    <span className="text-[10px] text-slate-400 mt-0.5">Apple Silicon & Intel</span>
+                    <span className="text-[10px] text-slate-400 mt-0.5">Apple Silicon & Intel (.command)</span>
                     <div className="w-full space-y-1.5 mt-2.5 sm:mt-3">
                       <button
                         id="btn-download-macos"
@@ -356,24 +356,33 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                   </div>
                 </div>
 
-                {/* Quick Linux Terminal Installation Command */}
-                <div className="mt-3 p-3 rounded-xl bg-black/40 border border-white/[0.06] text-xs flex items-center justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="text-[10px] text-slate-400 block font-semibold">Comando rápido no terminal Linux (.deb):</span>
-                    <code className="text-[11px] text-amber-300 font-mono select-all truncate block">
-                      sudo dpkg -i brazatalk_2.6.0_all.deb
-                    </code>
+                {/* Instructions Accordion / Info Box */}
+                <div className="mt-3 p-3 rounded-xl bg-black/40 border border-white/[0.06] text-xs space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-bold text-slate-300 flex items-center gap-1.5">
+                      <Info className="w-3.5 h-3.5 text-indigo-400" />
+                      <span>Instruções de Permissão de Execução por Sistema</span>
+                    </span>
                   </div>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText('sudo dpkg -i brazatalk_2.6.0_all.deb');
-                      setCopiedUrl(true);
-                      setTimeout(() => setCopiedUrl(false), 2000);
-                    }}
-                    className="px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/15 text-slate-300 text-[10px] font-medium shrink-0 cursor-pointer"
-                  >
-                    Copiar
-                  </button>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] text-slate-400">
+                    <div className="bg-white/[0.02] p-2 rounded-lg border border-white/[0.04]">
+                      <span className="font-bold text-amber-300 block mb-0.5">Linux</span>
+                      <code>sudo dpkg -i brazatalk_2.6.0_all.deb</code>
+                      <p className="text-[10px] text-slate-500 mt-1">Ou no script .sh: <code>chmod +x install-linux.sh</code></p>
+                    </div>
+
+                    <div className="bg-white/[0.02] p-2 rounded-lg border border-white/[0.04]">
+                      <span className="font-bold text-indigo-300 block mb-0.5">Windows</span>
+                      <span>Execute o <code>.cmd</code> para registrar o atalho com janela independente.</span>
+                    </div>
+
+                    <div className="bg-white/[0.02] p-2 rounded-lg border border-white/[0.04]">
+                      <span className="font-bold text-emerald-300 block mb-0.5">macOS</span>
+                      <code>chmod +x BrazaTalk-macOS.command</code>
+                      <p className="text-[10px] text-slate-500 mt-1">Se o Gatekeeper bloquear: Ajustes &gt; Privacidade & Segurança &gt; "Abrir Mesmo Assim".</p>
+                    </div>
+                  </div>
                 </div>
               </div>
             </>
@@ -474,30 +483,22 @@ export const AppInstallerModal: React.FC<AppInstallerModalProps> = ({ onClose, i
                       {updateState.isDownloading ? (
                         <>
                           <div className="w-4 h-4 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
-                          <span>Atualizando...</span>
+                          <span>Atualizando Service Worker...</span>
                         </>
                       ) : (
                         <>
                           <Zap className="w-4 h-4 fill-current" />
-                          <span>Atualizar com 1 Clique (OTA)</span>
+                          <span>Atualizar Agora (Service Worker)</span>
                         </>
                       )}
                     </button>
                   </div>
 
-                  {/* Progress Bar if Downloading */}
+                  {/* Status if updating */}
                   {updateState.isDownloading && (
-                    <div className="space-y-1.5 pt-2">
-                      <div className="flex justify-between text-xs text-indigo-200 font-semibold">
-                        <span>Progresso do Update</span>
-                        <span>{updateState.downloadProgress}%</span>
-                      </div>
-                      <div className="w-full h-2.5 bg-black/40 rounded-full overflow-hidden border border-white/10">
-                        <div
-                          className="h-full bg-gradient-to-r from-indigo-500 to-emerald-400 rounded-full transition-all duration-200"
-                          style={{ width: `${updateState.downloadProgress}%` }}
-                        />
-                      </div>
+                    <div className="pt-2 flex items-center gap-2 text-xs text-indigo-300 animate-pulse">
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>{updateState.statusText || 'Limpando cache anterior e ativando nova versão...'}</span>
                     </div>
                   )}
 

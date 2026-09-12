@@ -1,24 +1,24 @@
 import React, { useState } from 'react';
 import Markdown from 'react-markdown';
-import { Message, User } from '../../types';
+import { Message, User, Server, Permission } from '../../types';
 import {
   Smile,
   Reply,
   Pin,
   Trash2,
   Lock,
-  Play,
-  Pause,
   CornerDownRight,
   ShieldCheck,
   FileText,
   Download,
 } from 'lucide-react';
 import { EmojiReactionPicker } from './EmojiReactionPicker';
+import { hasPermission } from '../../utils/permissions';
 
 interface MessageItemProps {
   message: Message;
   currentUser: User;
+  server?: Server | null;
   onReact: (messageId: string, emoji: string) => void;
   onReply: (message: Message) => void;
   onPin?: (messageId: string) => void;
@@ -29,6 +29,7 @@ interface MessageItemProps {
 export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   currentUser,
+  server,
   onReact,
   onReply,
   onPin,
@@ -37,10 +38,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 }) => {
   const [showActions, setShowActions] = useState(false);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
-  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
   const isAuthor = message.authorId === currentUser.id;
-  const canDelete = isAuthor || isAdmin;
+  const canManage = isAdmin || (server ? hasPermission(currentUser, server, Permission.MANAGE_MESSAGES) : false);
+  const canDelete = isAuthor || canManage;
 
   // Format timestamp
   const date = new Date(message.timestamp);
@@ -144,32 +145,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             {message.content}
           </Markdown>
         </div>
-
-        {/* Voice Note Player if voice note */}
-        {message.isVoiceNote && (
-          <div className="mt-2 bg-[#141722] border border-white/[0.08] rounded-2xl p-3 max-w-sm flex items-center gap-3 shadow-md">
-            <button
-              onClick={() => setIsPlayingAudio(!isPlayingAudio)}
-              className="w-9 h-9 rounded-full bg-indigo-600 text-white flex items-center justify-center hover:bg-indigo-500 transition-all shadow-md shadow-indigo-600/30"
-            >
-              {isPlayingAudio ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-            </button>
-            <div className="flex-1 flex items-center gap-1">
-              {[12, 24, 18, 30, 22, 14, 28, 16, 20, 32, 18, 10, 26, 14].map((h, i) => (
-                <div
-                  key={i}
-                  className={`w-1 rounded-full transition-all duration-300 ${
-                    isPlayingAudio ? 'bg-indigo-500 animate-pulse' : 'bg-slate-700'
-                  }`}
-                  style={{ height: `${h}px` }}
-                />
-              ))}
-            </div>
-            <span className="text-[11px] font-mono text-slate-400">
-              0:{message.voiceDuration || 12}s
-            </span>
-          </div>
-        )}
 
         {/* Attachments preview */}
         {message.attachments && message.attachments.length > 0 && (
@@ -276,7 +251,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <Reply className="w-4 h-4" />
           </button>
 
-          {onPin && (
+          {onPin && (canManage || isAuthor) && (
             <button
               onClick={() => onPin(message.id)}
               title={message.pinned ? 'Desafixar Mensagem' : 'Fixar Mensagem'}

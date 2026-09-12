@@ -1,24 +1,25 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Channel, Message, MessageAttachment } from '../../types';
+import { Channel, Message, MessageAttachment, User, Server, Permission } from '../../types';
 import {
   PlusCircle,
   Smile,
-  Mic,
   Send,
   Lock,
   X,
   Bot,
   Sparkles,
-  Square,
   FileText,
   Image as ImageIcon,
 } from 'lucide-react';
 import { BOT_COMMANDS, BotCommand } from '../../services/botEngine';
 import { EmojiReactionPicker } from './EmojiReactionPicker';
+import { hasPermission } from '../../utils/permissions';
 
 interface ChatInputProps {
   channel: Channel;
   replyingTo: Message | null;
+  currentUser?: User | null;
+  server?: Server | null;
   onCancelReply: () => void;
   onSendMessage: (
     content: string,
@@ -32,6 +33,8 @@ interface ChatInputProps {
 export const ChatInput: React.FC<ChatInputProps> = ({
   channel,
   replyingTo,
+  currentUser,
+  server,
   onCancelReply,
   onSendMessage,
   isEncrypted,
@@ -41,14 +44,14 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const [showCommandMenu, setShowCommandMenu] = useState(false);
   const [filteredCommands, setFilteredCommands] = useState<BotCommand[]>(BOT_COMMANDS);
   const [selectedCmdIndex, setSelectedCmdIndex] = useState(0);
-  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
-  const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [pendingAttachment, setPendingAttachment] = useState<MessageAttachment | null>(null);
   const [isDraggingOver, setIsDraggingOver] = useState(false);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const recordTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const canSend = currentUser && server ? hasPermission(currentUser, server, Permission.SEND_MESSAGES) : true;
+  const canAttach = currentUser && server ? hasPermission(currentUser, server, Permission.ATTACH_FILES) : true;
 
   // Command auto-complete trigger
   useEffect(() => {
@@ -185,33 +188,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingOver(false);
+    if (!canAttach) return;
     const file = e.dataTransfer.files?.[0];
     if (file) {
       processFile(file);
     }
-  };
-
-  // Voice note recording simulation / media recorder
-  const startVoiceRecording = () => {
-    setIsRecordingVoice(true);
-    setRecordingSeconds(0);
-    recordTimerRef.current = setInterval(() => {
-      setRecordingSeconds((prev) => prev + 1);
-    }, 1000);
-  };
-
-  const finishVoiceRecording = () => {
-    if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-    const duration = Math.max(1, recordingSeconds);
-    setIsRecordingVoice(false);
-    setRecordingSeconds(0);
-    onSendMessage('🎙️ Mensagem de Voz Criptografada', true, duration);
-  };
-
-  const cancelVoiceRecording = () => {
-    if (recordTimerRef.current) clearInterval(recordTimerRef.current);
-    setIsRecordingVoice(false);
-    setRecordingSeconds(0);
   };
 
   return (
@@ -326,100 +307,73 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Main Input Container */}
       <div
-        className={`bg-[#141722] border border-white/[0.08] rounded-2xl flex items-center px-4 py-2.5 gap-3 transition-all focus-within:border-indigo-500/50 focus-within:shadow-[0_0_20px_-3px_rgba(99,102,241,0.2)] ${
-          replyingTo || pendingAttachment ? 'rounded-t-none' : ''
-        }`}
+        className={`bg-[#141722] border border-white/[0.08] rounded-2xl flex items-center px-4 py-2.5 gap-3 transition-all ${
+          canSend
+            ? 'focus-within:border-indigo-500/50 focus-within:shadow-[0_0_20px_-3px_rgba(99,102,241,0.2)]'
+            : 'opacity-60 cursor-not-allowed'
+        } ${replyingTo || pendingAttachment ? 'rounded-t-none' : ''}`}
       >
         {/* Attachment button */}
-        <button
-          id="btn-chat-attach-file"
-          title="Adicionar Anexo / Mídia (ou arraste e solte)"
-          onClick={() => fileInputRef.current?.click()}
-          className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/[0.06] cursor-pointer"
-        >
-          <PlusCircle className="w-5 h-5" />
-        </button>
+        {canAttach && (
+          <button
+            id="btn-chat-attach-file"
+            title="Adicionar Anexo / Mídia (ou arraste e solte)"
+            onClick={() => fileInputRef.current?.click()}
+            className="text-slate-400 hover:text-white transition-colors p-1 rounded-lg hover:bg-white/[0.06] cursor-pointer"
+          >
+            <PlusCircle className="w-5 h-5" />
+          </button>
+        )}
 
-        {/* E2EE Lock badge inside input */}
+        {/* Channel Cipher badge */}
         {isEncrypted && (
           <div
-            title="Criptografia E2EE AES-GCM 256 Ativa nesta conversa privada"
+            title="Cifra AES-GCM-256 ativa no canal"
             className="flex items-center gap-1 text-[11px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-1 rounded-lg font-semibold shrink-0 cursor-default"
           >
             <Lock className="w-3 h-3" />
-            <span className="hidden sm:inline">E2EE Privado</span>
+            <span className="hidden sm:inline">AES-GCM</span>
           </div>
         )}
 
-        {/* Text Input or Voice Recording Bar */}
-        {isRecordingVoice ? (
-          <div className="flex-1 flex items-center justify-between text-xs font-semibold text-rose-400">
-            <div className="flex items-center gap-2">
-              <div className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping" />
-              <span>Gravando áudio de voz... 0:{recordingSeconds.toString().padStart(2, '0')}s</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={cancelVoiceRecording}
-                className="px-2.5 py-1 rounded-lg bg-white/[0.08] hover:bg-white/[0.12] text-white"
-              >
-                Cancelar
-              </button>
-              <button
-                onClick={finishVoiceRecording}
-                className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white flex items-center gap-1 shadow-md"
-              >
-                <Square className="w-3 h-3 fill-current" />
-                <span>Enviar</span>
-              </button>
-            </div>
-          </div>
-        ) : (
-          <input
-            id="chat-message-input"
-            ref={inputRef}
-            type="text"
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              isEncrypted
-                ? `Mensagem criptografada E2EE para ${channel.name}...`
-                : `Conversar em #${channel.name} (Digite / para comandos de IA e bots)`
-            }
-            className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none select-text font-normal"
-          />
-        )}
+        {/* Text Input */}
+        <input
+          id="chat-message-input"
+          ref={inputRef}
+          type="text"
+          value={text}
+          disabled={!canSend}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder={
+            !canSend
+              ? 'Você não tem permissão para enviar mensagens neste canal'
+              : isEncrypted
+              ? `Mensagem criptografada (AES-GCM) para #${channel.name}...`
+              : `Conversar em #${channel.name} (Digite / para comandos de IA e bots)`
+          }
+          className="flex-1 bg-transparent text-sm text-white placeholder-slate-500 focus:outline-none select-text font-normal disabled:cursor-not-allowed"
+        />
 
         {/* Right Action Buttons */}
-        {!isRecordingVoice && (
-          <div className="flex items-center gap-1 text-slate-400 relative">
-            {/* Quick AI Trigger button */}
-            {!isEncrypted && (
-              <button
-                id="btn-quick-ai-trigger"
-                onClick={() => {
-                  setText('/ai ');
-                  inputRef.current?.focus();
-                }}
-                title="Perguntar ao Gemini AI (/ai)"
-                className="hover:text-indigo-400 p-1.5 transition-colors rounded-lg hover:bg-white/[0.06] cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4" />
-              </button>
-            )}
-
-            {/* Voice note record button */}
+        <div className="flex items-center gap-1 text-slate-400 relative">
+          {/* Quick AI Trigger button */}
+          {!isEncrypted && canSend && (
             <button
-              id="btn-record-voice-note"
-              onClick={startVoiceRecording}
-              title="Gravar Mensagem de Voz"
-              className="hover:text-white p-1.5 transition-colors rounded-lg hover:bg-white/[0.06] cursor-pointer"
+              id="btn-quick-ai-trigger"
+              onClick={() => {
+                setText('/ai ');
+                inputRef.current?.focus();
+              }}
+              title="Perguntar ao Gemini AI (/ai)"
+              className="hover:text-indigo-400 p-1.5 transition-colors rounded-lg hover:bg-white/[0.06] cursor-pointer"
             >
-              <Mic className="w-4 h-4" />
+              <Sparkles className="w-4 h-4" />
             </button>
+          )}
 
-            {/* Emoji picker toggle */}
+          {/* Emoji picker toggle */}
+          {canSend && (
             <div className="relative">
               <button
                 id="btn-toggle-emoji-input"
@@ -439,23 +393,23 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 />
               )}
             </div>
+          )}
 
-            {/* Send Button */}
-            <button
-              id="btn-send-message-submit"
-              onClick={handleSend}
-              title="Enviar Mensagem (Enter)"
-              disabled={!text.trim() && !pendingAttachment}
-              className={`p-1.5 rounded-xl transition-all cursor-pointer ${
-                text.trim() || pendingAttachment
-                  ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/30'
-                  : 'text-slate-600 hover:text-slate-400'
-              }`}
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
-        )}
+          {/* Send Button */}
+          <button
+            id="btn-send-message-submit"
+            onClick={handleSend}
+            title="Enviar Mensagem (Enter)"
+            disabled={!canSend || (!text.trim() && !pendingAttachment)}
+            className={`p-1.5 rounded-xl transition-all ${
+              canSend && (text.trim() || pendingAttachment)
+                ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-md shadow-indigo-600/30 cursor-pointer'
+                : 'text-slate-600 cursor-not-allowed'
+            }`}
+          >
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

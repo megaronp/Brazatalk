@@ -110,19 +110,6 @@ export const UserProfilePopover: React.FC<UserProfilePopoverProps> = ({
             </div>
           )}
 
-          {/* E2EE Safety Fingerprint */}
-          {user.e2eeFingerprint && (
-            <div className="mb-3 bg-[#141722] p-2.5 rounded-xl border border-emerald-500/20">
-              <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 mb-1">
-                <Lock className="w-3.5 h-3.5" />
-                <span>Chave de Segurança E2EE</span>
-              </div>
-              <p className="text-[10px] font-mono text-slate-400 tracking-wider truncate">
-                {user.e2eeFingerprint}
-              </p>
-            </div>
-          )}
-
           {/* Roles Chips */}
           <div className="mb-3">
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">

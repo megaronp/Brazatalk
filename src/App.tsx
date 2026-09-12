@@ -1739,6 +1739,7 @@ export default function App() {
               channel={currentChannel}
               messages={currentChannelMessages}
               currentUser={currentUser}
+              server={currentServer}
               onSendMessage={handleSendMessage}
               onReact={handleReact}
               onPinMessage={handlePinMessage}
