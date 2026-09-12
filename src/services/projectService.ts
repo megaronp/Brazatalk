@@ -1052,7 +1052,8 @@ export const projectService = {
       const docRef = doc(db, 'projectRooms', channelId);
       const { customApiKey, files, ...safeCloudState } = updatedState;
       if (!safeCloudState.serverId) {
-        safeCloudState.serverId = 'server-braza-community';
+        console.warn('saveProjectState aborted: missing serverId for projectRoom', channelId);
+        return;
       }
       if (!safeCloudState.channelId) {
         safeCloudState.channelId = channelId;

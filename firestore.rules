@@ -27,7 +27,6 @@ service cloud.firestore {
           get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid ||
           (get(/databases/$(database)/documents/servers/$(serverId)).data.memberIds is list &&
            get(/databases/$(database)/documents/servers/$(serverId)).data.memberIds.hasAny([request.auth.uid])) ||
-          get(/databases/$(database)/documents/servers/$(serverId)).data.isPublic == true ||
           isAdmin()
         )
       );
@@ -72,11 +71,9 @@ service cloud.firestore {
         (resource != null && 'serverId' in resource.data && resource.data.serverId != null && isServerMember(resource.data.serverId)) ||
         isAdmin()
       );
-      allow create: if isAuthenticated() && (
+      allow create: if isAuthenticated() &&
         request.resource.data.channelId == channelId &&
-        ('serverId' in request.resource.data && request.resource.data.serverId != null && isServerMember(request.resource.data.serverId)) ||
-        isAdmin()
-      );
+        (('serverId' in request.resource.data && request.resource.data.serverId != null && isServerMember(request.resource.data.serverId)) || isAdmin());
       allow update: if isAuthenticated() && (
         (resource != null && 'serverId' in resource.data && resource.data.serverId != null && isServerMember(resource.data.serverId)) ||
         isAdmin()
@@ -106,7 +103,11 @@ service cloud.firestore {
     }
 
     // Messages: strictly scoped under servers/{serverId}/channels/{channelId}/messages
-    // Root /messages collection is closed to prevent cross-server data leaks
+    // Root /messages collection is closed to prevent cross-server data leaks, except for admin migration/cleanup
+    match /messages/{messageId} {
+      allow read, delete: if isAdmin();
+    }
+
     match /servers/{serverId}/channels/{channelId}/messages/{messageId} {
       allow read: if isServerMember(serverId);
       allow create: if isServerMember(serverId) && (

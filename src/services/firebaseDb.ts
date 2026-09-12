@@ -242,7 +242,12 @@ export const firebaseDb = {
     callback: (messages: Message[]) => void,
     maxCount: number = 60
   ) {
-    if (!channelId) return () => {};
+    if (!channelId || !serverId) {
+      if (!serverId && channelId) {
+        console.warn('subscribeToChannelMessages skipped: serverId is required to prevent leaking messages across servers');
+      }
+      return () => {};
+    }
 
     // Deliver offline cached messages immediately
     offlineStorage.getCachedMessages(channelId).then((cached) => {
@@ -251,8 +256,7 @@ export const firebaseDb = {
       }
     }).catch(() => {});
 
-    const targetServerId = serverId || 'server-braza-community';
-    const messagesRef = collection(db, 'servers', targetServerId, 'channels', channelId, 'messages');
+    const messagesRef = collection(db, 'servers', serverId, 'channels', channelId, 'messages');
     let isCleanedUp = false;
     let currentUnsub: (() => void) | null = null;
 
@@ -272,7 +276,7 @@ export const firebaseDb = {
           callback(msgs);
           offlineStorage.cacheMessages(msgs).catch(() => {});
         }, (fallbackErr) => {
-          handleFirestoreError(fallbackErr, OperationType.LIST, `servers/${targetServerId}/channels/${channelId}/messages`);
+          handleFirestoreError(fallbackErr, OperationType.LIST, `servers/${serverId}/channels/${channelId}/messages`);
           offlineStorage.getCachedMessages(channelId).then((cached) => {
             if (cached && cached.length > 0) callback(cached);
           }).catch(() => {});
@@ -315,7 +319,14 @@ export const firebaseDb = {
 
   // Send a message with offline fallback queue (strictly saved in server subcollection)
   async sendMessage(message: Message, serverId?: string) {
-    const sId = serverId || message.serverId || 'server-braza-community';
+    const sId = serverId || message.serverId;
+    if (!sId) {
+      const err = new Error('Cannot send message: missing serverId');
+      console.warn('Firestore sendMessage rejected: missing serverId, queuing to outbox:', err);
+      await offlineStorage.queueOutboxMessage(message);
+      await offlineStorage.cacheMessages([message]);
+      throw err;
+    }
     const msgRef = doc(db, 'servers', sId, 'channels', message.channelId, 'messages', message.id);
     const cleaned = sanitizeFirestoreData({ ...message, serverId: sId });
     try {
@@ -335,8 +346,12 @@ export const firebaseDb = {
     if (pending.length === 0) return 0;
     let synced = 0;
     for (const msg of pending) {
+      const sId = msg.serverId;
+      if (!sId) {
+        console.warn('Skipping outbox sync for message without serverId:', msg.id);
+        continue;
+      }
       try {
-        const sId = msg.serverId || 'server-braza-community';
         const msgRef = doc(db, 'servers', sId, 'channels', msg.channelId, 'messages', msg.id);
         const cleaned = sanitizeFirestoreData({ ...msg, serverId: sId });
         await setDoc(msgRef, cleaned);
@@ -353,10 +368,10 @@ export const firebaseDb = {
 
   // Update a message (e.g. edit, reactions, pin)
   async updateMessage(messageId: string, updates: Partial<Message>, serverId?: string, channelId?: string) {
-    const sId = serverId || updates.serverId || 'server-braza-community';
+    const sId = serverId || updates.serverId;
     const cId = channelId || updates.channelId;
-    if (!cId) {
-      console.warn('updateMessage requires channelId');
+    if (!sId || !cId) {
+      console.warn('updateMessage requires both serverId and channelId', { serverId: sId, channelId: cId });
       return;
     }
     const msgRef = doc(db, 'servers', sId, 'channels', cId, 'messages', messageId);
@@ -366,19 +381,22 @@ export const firebaseDb = {
 
   // Delete a message
   async deleteMessage(messageId: string, serverId?: string, channelId?: string) {
-    const sId = serverId || 'server-braza-community';
-    if (!channelId) {
-      console.warn('deleteMessage requires channelId');
+    if (!serverId || !channelId) {
+      console.warn('deleteMessage requires both serverId and channelId', { serverId, channelId });
       return;
     }
-    await deleteDoc(doc(db, 'servers', sId, 'channels', channelId, 'messages', messageId));
+    await deleteDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId));
   },
 
   // Delete all messages belonging to a deleted channel (complete dependency wipe)
   async deleteChannelMessages(channelId: string, serverId?: string) {
+    if (!serverId) {
+      console.warn('deleteChannelMessages requires serverId', { channelId, serverId });
+      await offlineStorage.clearCachedMessagesForChannel(channelId);
+      return;
+    }
     try {
-      const sId = serverId || 'server-braza-community';
-      const messagesRef = collection(db, 'servers', sId, 'channels', channelId, 'messages');
+      const messagesRef = collection(db, 'servers', serverId, 'channels', channelId, 'messages');
       const snap = await getDocs(messagesRef);
       const deletePromises = snap.docs.map((docSnap) => deleteDoc(docSnap.ref));
       await Promise.all(deletePromises);
@@ -558,5 +576,84 @@ export const firebaseDb = {
       offlineStorage.cacheServers([initialServer]).catch(() => {});
     }
     return initialServer;
+  },
+
+  // Admin Migration: Migrate legacy messages from root /messages to servers/{serverId}/channels/{channelId}/messages
+  async migrateLegacyMessages(): Promise<{ migrated: number; errors: number; details: string[] }> {
+    const details: string[] = [];
+    let migrated = 0;
+    let errors = 0;
+
+    try {
+      const rootMessagesRef = collection(db, 'messages');
+      const snap = await getDocs(rootMessagesRef);
+      if (snap.empty) {
+        details.push('Nenhuma mensagem legada encontrada na coleção raiz /messages.');
+        return { migrated: 0, errors: 0, details };
+      }
+
+      // Fetch existing servers to map channels to their serverId
+      const serversSnap = await getDocs(collection(db, 'servers'));
+      const channelToServerMap: Record<string, string> = {};
+      serversSnap.forEach((docSnap) => {
+        const srv = docSnap.data() as Server;
+        if (srv.channels && Array.isArray(srv.channels)) {
+          srv.channels.forEach((ch) => {
+            if (ch && ch.id) channelToServerMap[ch.id] = srv.id;
+          });
+        }
+      });
+
+      for (const docSnap of snap.docs) {
+        const data = docSnap.data() as Message;
+        const msgId = docSnap.id;
+        const channelId = data.channelId;
+        const targetServerId = data.serverId || channelToServerMap[channelId] || 'server-braza-community';
+
+        if (!channelId) {
+          details.push(`Mensagem ${msgId} ignorada por ausência de channelId.`);
+          errors++;
+          continue;
+        }
+
+        try {
+          const targetRef = doc(db, 'servers', targetServerId, 'channels', channelId, 'messages', msgId);
+          await setDoc(targetRef, sanitizeFirestoreData({ ...data, serverId: targetServerId, channelId }));
+          await deleteDoc(docSnap.ref);
+          migrated++;
+        } catch (err: any) {
+          details.push(`Erro ao migrar mensagem ${msgId}: ${err?.message || err}`);
+          errors++;
+        }
+      }
+
+      details.push(`Migração concluída: ${migrated} mensagens migradas, ${errors} erros.`);
+    } catch (err: any) {
+      details.push(`Falha geral na migração de mensagens: ${err?.message || err}`);
+      errors++;
+    }
+
+    return { migrated, errors, details };
+  },
+
+  // Admin Utility: Purge orphaned root /messages collection documents
+  async purgeLegacyMessages(): Promise<{ purged: number; errors: number }> {
+    let purged = 0;
+    let errors = 0;
+    try {
+      const rootMessagesRef = collection(db, 'messages');
+      const snap = await getDocs(rootMessagesRef);
+      for (const docSnap of snap.docs) {
+        try {
+          await deleteDoc(docSnap.ref);
+          purged++;
+        } catch {
+          errors++;
+        }
+      }
+    } catch (e) {
+      console.warn('Falha ao purgar mensagens legadas:', e);
+    }
+    return { purged, errors };
   }
 };

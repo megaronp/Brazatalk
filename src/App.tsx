@@ -830,7 +830,7 @@ export default function App() {
     voiceDuration?: number,
     attachments?: any[]
   ) => {
-    if (!firebaseUser) return;
+    if (!firebaseUser || !currentServer?.id || !currentChannel?.id) return;
     const isEncrypted = currentChannel.isE2EE || false;
     let encryptedContent = content;
     let encryptionIv: string | undefined = undefined;
@@ -848,7 +848,7 @@ export default function App() {
     const newMsg: Message = {
       id: `msg-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
       channelId: currentChannel.id,
-      serverId: currentServer?.id || '',
+      serverId: currentServer.id,
       authorId: currentUser.id,
       authorName: currentUser.name,
       authorAvatar: currentUser.avatar,
