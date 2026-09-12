@@ -259,9 +259,16 @@ export const firebaseDb = {
     const messagesRef = collection(db, 'servers', serverId, 'channels', channelId, 'messages');
     let isCleanedUp = false;
     let currentUnsub: (() => void) | null = null;
+    let retryTimeout: any = null;
+    let retryCount = 0;
+    const MAX_RETRIES = 2;
 
     const startFallbackListener = () => {
       if (isCleanedUp) return;
+      if (currentUnsub) {
+        currentUnsub();
+        currentUnsub = null;
+      }
       try {
         const fallbackQ = query(
           messagesRef,
@@ -275,7 +282,19 @@ export const firebaseDb = {
           msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
           callback(msgs);
           offlineStorage.cacheMessages(msgs).catch(() => {});
-        }, (fallbackErr) => {
+        }, (fallbackErr: any) => {
+          const isPermissionDenied = fallbackErr?.code === 'permission-denied' ||
+            (typeof fallbackErr?.message === 'string' && fallbackErr.message.includes('permission-denied'));
+
+          if (isPermissionDenied && retryCount < MAX_RETRIES && !isCleanedUp) {
+            retryCount++;
+            console.warn(`Fallback messages listener permission-denied (tentativa ${retryCount}/${MAX_RETRIES} em 1500ms para sync de membro):`, fallbackErr?.message);
+            retryTimeout = setTimeout(() => {
+              if (!isCleanedUp) attachListener();
+            }, 1500 * retryCount);
+            return;
+          }
+
           handleFirestoreError(fallbackErr, OperationType.LIST, `servers/${serverId}/channels/${channelId}/messages`);
           offlineStorage.getCachedMessages(channelId).then((cached) => {
             if (cached && cached.length > 0) callback(cached);
@@ -286,31 +305,57 @@ export const firebaseDb = {
       }
     };
 
-    try {
-      const q = query(
-        messagesRef, 
-        orderBy('timestamp', 'desc'),
-        limit(maxCount)
-      );
-      
-      currentUnsub = onSnapshot(q, (snapshot) => {
-        const msgs: Message[] = [];
-        snapshot.forEach((docSnap) => {
-          msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+    const attachListener = () => {
+      if (isCleanedUp) return;
+      if (currentUnsub) {
+        currentUnsub();
+        currentUnsub = null;
+      }
+
+      try {
+        const q = query(
+          messagesRef, 
+          orderBy('timestamp', 'desc'),
+          limit(maxCount)
+        );
+        
+        currentUnsub = onSnapshot(q, (snapshot) => {
+          retryCount = 0; // Reset upon successful snapshot
+          const msgs: Message[] = [];
+          snapshot.forEach((docSnap) => {
+            msgs.push({ id: docSnap.id, ...docSnap.data() } as Message);
+          });
+          msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
+          callback(msgs);
+          offlineStorage.cacheMessages(msgs).catch(() => {});
+        }, (err: any) => {
+          const isPermissionDenied = err?.code === 'permission-denied' ||
+            (typeof err?.message === 'string' && err.message.includes('permission-denied'));
+
+          if (isPermissionDenied && retryCount < MAX_RETRIES && !isCleanedUp) {
+            retryCount++;
+            console.warn(`Firestore messages subscription permission-denied (tentativa ${retryCount}/${MAX_RETRIES} em 1500ms para sync de membro):`, err?.message);
+            retryTimeout = setTimeout(() => {
+              if (!isCleanedUp) attachListener();
+            }, 1500 * retryCount);
+            return;
+          }
+
+          console.warn('Firestore ordered messages listener fell back to unordered:', err?.message || err);
+          startFallbackListener();
         });
-        msgs.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
-        callback(msgs);
-        offlineStorage.cacheMessages(msgs).catch(() => {});
-      }, (err) => {
-        console.warn('Firestore ordered messages listener fell back to unordered:', err?.message || err);
+      } catch (e) {
         startFallbackListener();
-      });
-    } catch (e) {
-      startFallbackListener();
-    }
+      }
+    };
+
+    attachListener();
 
     return () => {
       isCleanedUp = true;
+      if (retryTimeout) {
+        clearTimeout(retryTimeout);
+      }
       if (currentUnsub) {
         currentUnsub();
       }
@@ -576,84 +621,5 @@ export const firebaseDb = {
       offlineStorage.cacheServers([initialServer]).catch(() => {});
     }
     return initialServer;
-  },
-
-  // Admin Migration: Migrate legacy messages from root /messages to servers/{serverId}/channels/{channelId}/messages
-  async migrateLegacyMessages(): Promise<{ migrated: number; errors: number; details: string[] }> {
-    const details: string[] = [];
-    let migrated = 0;
-    let errors = 0;
-
-    try {
-      const rootMessagesRef = collection(db, 'messages');
-      const snap = await getDocs(rootMessagesRef);
-      if (snap.empty) {
-        details.push('Nenhuma mensagem legada encontrada na coleção raiz /messages.');
-        return { migrated: 0, errors: 0, details };
-      }
-
-      // Fetch existing servers to map channels to their serverId
-      const serversSnap = await getDocs(collection(db, 'servers'));
-      const channelToServerMap: Record<string, string> = {};
-      serversSnap.forEach((docSnap) => {
-        const srv = docSnap.data() as Server;
-        if (srv.channels && Array.isArray(srv.channels)) {
-          srv.channels.forEach((ch) => {
-            if (ch && ch.id) channelToServerMap[ch.id] = srv.id;
-          });
-        }
-      });
-
-      for (const docSnap of snap.docs) {
-        const data = docSnap.data() as Message;
-        const msgId = docSnap.id;
-        const channelId = data.channelId;
-        const targetServerId = data.serverId || channelToServerMap[channelId] || 'server-braza-community';
-
-        if (!channelId) {
-          details.push(`Mensagem ${msgId} ignorada por ausência de channelId.`);
-          errors++;
-          continue;
-        }
-
-        try {
-          const targetRef = doc(db, 'servers', targetServerId, 'channels', channelId, 'messages', msgId);
-          await setDoc(targetRef, sanitizeFirestoreData({ ...data, serverId: targetServerId, channelId }));
-          await deleteDoc(docSnap.ref);
-          migrated++;
-        } catch (err: any) {
-          details.push(`Erro ao migrar mensagem ${msgId}: ${err?.message || err}`);
-          errors++;
-        }
-      }
-
-      details.push(`Migração concluída: ${migrated} mensagens migradas, ${errors} erros.`);
-    } catch (err: any) {
-      details.push(`Falha geral na migração de mensagens: ${err?.message || err}`);
-      errors++;
-    }
-
-    return { migrated, errors, details };
-  },
-
-  // Admin Utility: Purge orphaned root /messages collection documents
-  async purgeLegacyMessages(): Promise<{ purged: number; errors: number }> {
-    let purged = 0;
-    let errors = 0;
-    try {
-      const rootMessagesRef = collection(db, 'messages');
-      const snap = await getDocs(rootMessagesRef);
-      for (const docSnap of snap.docs) {
-        try {
-          await deleteDoc(docSnap.ref);
-          purged++;
-        } catch {
-          errors++;
-        }
-      }
-    } catch (e) {
-      console.warn('Falha ao purgar mensagens legadas:', e);
-    }
-    return { purged, errors };
   }
 };
