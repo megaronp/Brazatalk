@@ -19,6 +19,20 @@ service cloud.firestore {
       );
     }
 
+    // Helper function to check if the user is a member or owner of the specified server
+    function isServerMember(serverId) {
+      return isAuthenticated() && (
+        exists(/databases/$(database)/documents/servers/$(serverId)) &&
+        (
+          get(/databases/$(database)/documents/servers/$(serverId)).data.ownerId == request.auth.uid ||
+          (get(/databases/$(database)/documents/servers/$(serverId)).data.memberIds is list &&
+           get(/databases/$(database)/documents/servers/$(serverId)).data.memberIds.hasAny([request.auth.uid])) ||
+          get(/databases/$(database)/documents/servers/$(serverId)).data.isPublic == true ||
+          isAdmin()
+        )
+      );
+    }
+
     // Users Collection: users can only manage their own profile document
     match /users/{userId} {
       allow read: if isAuthenticated();
@@ -27,9 +41,14 @@ service cloud.firestore {
       allow delete: if isOwner(userId) || isAdmin();
     }
 
-    // Servers Collection: community servers and guilds
+    // Servers Collection: restricted to members, owners, public hubs, and admin
     match /servers/{serverId} {
-      allow read: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource.data.ownerId == request.auth.uid ||
+        (resource.data.memberIds is list && resource.data.memberIds.hasAny([request.auth.uid])) ||
+        resource.data.isPublic == true ||
+        isAdmin()
+      );
       allow create: if isAuthenticated() && (
         request.resource.data.ownerId == request.auth.uid ||
         isAdmin()
@@ -48,17 +67,47 @@ service cloud.firestore {
 
     // Project Rooms (Workspace / Autonomous AI development rooms)
     match /projectRooms/{channelId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && request.resource.data.channelId == channelId;
-      allow update: if isAuthenticated();
-      allow delete: if isAuthenticated();
+      allow read: if isAuthenticated() && (
+        resource == null ||
+        !('serverId' in resource.data) ||
+        resource.data.serverId == null ||
+        isServerMember(resource.data.serverId) ||
+        isAdmin()
+      );
+      allow create: if isAuthenticated() && (
+        request.resource.data.channelId == channelId &&
+        (
+          !('serverId' in request.resource.data) ||
+          request.resource.data.serverId == null ||
+          isServerMember(request.resource.data.serverId) ||
+          isAdmin()
+        )
+      );
+      allow update: if isAuthenticated() && (
+        (resource != null && 'serverId' in resource.data && resource.data.serverId != null ? isServerMember(resource.data.serverId) : true) ||
+        isAdmin()
+      );
+      allow delete: if isAuthenticated() && (
+        (resource != null && 'serverId' in resource.data && resource.data.serverId != null ? isServerMember(resource.data.serverId) : true) ||
+        isAdmin()
+      );
 
       // Granular per-file documents to eliminate collaborative clobbering
       match /files/{fileId} {
-        allow read: if isAuthenticated();
-        allow create: if isAuthenticated();
-        allow update: if isAuthenticated();
-        allow delete: if isAuthenticated();
+        allow read: if isAuthenticated() && (
+          !exists(/databases/$(database)/documents/projectRooms/$(channelId)) ||
+          !('serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data) ||
+          get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId == null ||
+          isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId) ||
+          isAdmin()
+        );
+        allow create, update, delete: if isAuthenticated() && (
+          !exists(/databases/$(database)/documents/projectRooms/$(channelId)) ||
+          !('serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data) ||
+          get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId == null ||
+          isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId) ||
+          isAdmin()
+        );
       }
     }
 

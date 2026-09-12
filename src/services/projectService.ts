@@ -690,6 +690,7 @@ export const projectService = {
       gameEngine?: string;
       profileId?: ProjectProfileId;
       previewType?: 'web' | 'console' | 'none';
+      serverId?: string;
     }
   ): ProjectRoomState {
     const defaultSavedKeys = this.getStoredApiKeys();
@@ -698,6 +699,7 @@ export const projectService = {
 
     return {
       channelId,
+      serverId: options?.serverId,
       projectName: channelName ? channelName.replace(/[_-]/g, ' ') : 'Novo Projeto',
       projectProfile: profileId,
       gameEngine: options?.gameEngine || profile.engine || 'Geral / Código',
@@ -966,7 +968,7 @@ export const projectService = {
   // -----------------------------------------------------------------
   // Room State Loading & Metadata Saving
   // -----------------------------------------------------------------
-  async loadProjectState(channelId: string, channelName?: string): Promise<ProjectRoomState> {
+  async loadProjectState(channelId: string, channelName?: string, serverId?: string): Promise<ProjectRoomState> {
     let state: ProjectRoomState | null = null;
 
     // 1. Try Firestore root doc
@@ -992,7 +994,10 @@ export const projectService = {
 
     // 3. Fall back to default blank state
     if (!state) {
-      state = this.getBlankProjectState(channelId, channelName);
+      state = this.getBlankProjectState(channelId, channelName, { serverId });
+      this.saveProjectState(channelId, state).catch(() => {});
+    } else if (serverId && !state.serverId) {
+      state.serverId = serverId;
       this.saveProjectState(channelId, state).catch(() => {});
     }
 

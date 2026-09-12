@@ -103,21 +103,12 @@ export const firebaseDb = {
     }
 
     const serversRef = collection(db, 'servers');
+    const q = query(serversRef, where('memberIds', 'array-contains', userId));
 
-    return onSnapshot(serversRef, (snapshot) => {
-      const allServers: Server[] = [];
+    return onSnapshot(q, (snapshot) => {
+      const userServers: Server[] = [];
       snapshot.forEach((docSnap) => {
-        allServers.push({ id: docSnap.id, ...docSnap.data() } as Server);
-      });
-
-      // Filter: users see servers where they are owner, member, or official public community
-      const userServers = allServers.filter((s) => {
-        if (!userId) return s.id === 'server-braza-community' || (s as any).isPublic === true;
-        const isOwner = s.ownerId === userId;
-        const isMember = (Array.isArray(s.members) && s.members.some((m) => m && m.id === userId)) ||
-                         (Array.isArray((s as any).memberIds) && (s as any).memberIds.includes(userId));
-        const isPublicCommunity = s.id === 'server-braza-community' || (s as any).isPublic === true;
-        return isOwner || isMember || isPublicCommunity;
+        userServers.push({ id: docSnap.id, ...docSnap.data() } as Server);
       });
 
       callback(userServers);

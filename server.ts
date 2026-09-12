@@ -387,6 +387,65 @@ function broadcastToChannel(channelId: string, data: object, excludeWs?: WebSock
   });
 }
 
+export interface ResolvedIdentity {
+  userId: string;
+  userName: string;
+  userAvatar?: string;
+  isVerified: boolean;
+}
+
+/**
+ * Resolves and strictly enforces client identity:
+ * - If a token is provided, verifies it with Google/Firebase public certs.
+ *   - If valid, returns the verified UID with isVerified = true.
+ *   - If invalid, returns null so the connection can be terminated immediately.
+ * - If NO token is provided:
+ *   - NEVER returns an un-prefixed UID.
+ *   - Guarantees 'guest-' prefix so that guest IDs can never match or impersonate a real Firebase UID.
+ */
+export async function resolveIdentity(
+  msg: any,
+  clientId: string
+): Promise<ResolvedIdentity | null> {
+  const providedName =
+    typeof msg.userName === 'string' && msg.userName.trim() ? msg.userName.trim() : 'Membro';
+  const providedAvatar = typeof msg.userAvatar === 'string' ? msg.userAvatar : undefined;
+
+  if (msg.token) {
+    try {
+      const verified = await verifyFirebaseIdToken(msg.token);
+      if (!verified) {
+        return null;
+      }
+      return {
+        userId: verified.uid,
+        userName: verified.name || providedName,
+        userAvatar: providedAvatar,
+        isVerified: true,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  // No token provided: strictly assign guest identity with 'guest-' prefix
+  let guestId: string;
+  if (typeof msg.userId === 'string' && msg.userId.startsWith('guest-')) {
+    guestId = msg.userId;
+  } else if (typeof msg.userId === 'string' && msg.userId.trim()) {
+    guestId = `guest-${msg.userId.trim()}`;
+  } else {
+    guestId = `guest-${clientId}`;
+  }
+
+  return {
+    userId: guestId,
+    userName: providedName,
+    userAvatar: providedAvatar,
+    isVerified: false,
+  };
+}
+
 wss.on('connection', (ws) => {
   let clientId = `client-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   clients.set(clientId, { ws });
@@ -421,45 +480,27 @@ wss.on('connection', (ws) => {
         }
 
         case 'auth': {
-          let verifiedUserId = clientId;
-          let verifiedUserName = msg.userName || 'Membro';
-          let verifiedAvatar = msg.userAvatar;
-
-          // Verify Firebase ID Token if provided (C3 / P3 / N1)
-          if (msg.token) {
-            try {
-              const verified = await verifyFirebaseIdToken(msg.token);
-              if (!verified) {
-                // Reject invalid token immediately - close connection to eliminate impersonation (N1)
-                ws.close(4001, 'invalid token');
-                return;
-              }
-              verifiedUserId = verified.uid;
-              verifiedUserName = verified.name || msg.userName || 'Membro';
-            } catch {
-              ws.close(4001, 'invalid token');
-              return;
-            }
-          } else if (msg.userId) {
-            // Keep user-provided ID consistent across client and server
-            verifiedUserId = msg.userId;
-          } else {
-            verifiedUserId = `guest-${clientId}`;
+          // Strictly resolve and enforce authenticated vs guest identity
+          const identity = await resolveIdentity(msg, clientId);
+          if (!identity) {
+            // Invalid token provided: reject immediately and close connection
+            ws.close(4001, 'invalid token');
+            return;
           }
 
-          // Maintain stable connection ID in clients map without deleting or re-keying
+          // Maintain stable connection in clients map
           const existingClient = clients.get(clientId);
           if (existingClient) {
-            existingClient.userId = verifiedUserId;
-            existingClient.userName = verifiedUserName;
-            existingClient.userAvatar = verifiedAvatar;
+            existingClient.userId = identity.userId;
+            existingClient.userName = identity.userName;
+            existingClient.userAvatar = identity.userAvatar;
             if (msg.channelId) existingClient.currentChannelId = msg.channelId;
           } else {
             clients.set(clientId, {
               ws,
-              userId: verifiedUserId,
-              userName: verifiedUserName,
-              userAvatar: verifiedAvatar,
+              userId: identity.userId,
+              userName: identity.userName,
+              userAvatar: identity.userAvatar,
               currentChannelId: msg.channelId,
             });
           }
@@ -467,7 +508,9 @@ wss.on('connection', (ws) => {
           // Confirm authentication success to client
           ws.send(JSON.stringify({
             type: 'auth-ok',
-            userId: verifiedUserId,
+            userId: identity.userId,
+            userName: identity.userName,
+            isVerified: identity.isVerified,
           }));
 
           // Send current active voice participants
@@ -645,40 +688,26 @@ wss.on('connection', (ws) => {
         case 'start-screen-share': {
           const client = clients.get(clientId);
           const effectiveUserId = client?.userId || clientId;
+          const currentChannel = client?.currentChannelId || msg.channelId;
+
+          // Participant must ALREADY be connected in the voice channel to start screen sharing
+          const p = voiceParticipants.get(effectiveUserId);
+          if (!p || (currentChannel && p.channelId !== currentChannel)) {
+            console.warn(`[Voice] Rejected start-screen-share: user ${effectiveUserId} not in channel ${currentChannel}`);
+            break;
+          }
+
           if (client) {
             client.isScreenSharing = true;
-            if (msg.channelId) client.currentChannelId = msg.channelId;
           }
-
-          let p = voiceParticipants.get(effectiveUserId);
-          if (!p && msg.userId) p = voiceParticipants.get(msg.userId);
-
-          if (p) {
-            p.isScreenSharing = true;
-          } else {
-            // Retain participant in voiceParticipants so broadcast sync preserves them
-            const newP: ServerVoiceParticipant = {
-              userId: effectiveUserId,
-              userName: client?.userName || msg.userName || 'Membro',
-              userAvatar: client?.userAvatar || msg.userAvatar,
-              channelId: msg.channelId,
-              isMuted: client?.isMuted || false,
-              isDeafened: client?.isDeafened || false,
-              isSpeaking: false,
-              isScreenSharing: true,
-              isCameraOn: false,
-              viewers: [],
-              joinedAt: Date.now(),
-            };
-            voiceParticipants.set(effectiveUserId, newP);
-          }
+          p.isScreenSharing = true;
 
           broadcast({
             type: 'screen-share-started',
-            channelId: msg.channelId,
+            channelId: p.channelId,
             userId: effectiveUserId,
-            userName: client?.userName || msg.userName,
-            streamTitle: msg.streamTitle || `${client?.userName || msg.userName}'s Screen`,
+            userName: p.userName || client?.userName || 'Membro',
+            streamTitle: msg.streamTitle || `${p.userName || client?.userName || 'Membro'}'s Screen`,
           });
 
           broadcast({
@@ -693,15 +722,14 @@ wss.on('connection', (ws) => {
           const effectiveUserId = client?.userId || clientId;
           if (client) client.isScreenSharing = false;
 
-          let p = voiceParticipants.get(effectiveUserId);
-          if (!p && msg.userId) p = voiceParticipants.get(msg.userId);
+          const p = voiceParticipants.get(effectiveUserId);
           if (p) p.isScreenSharing = false;
 
           broadcast({
             type: 'screen-share-stopped',
-            channelId: msg.channelId,
+            channelId: p?.channelId || client?.currentChannelId || msg.channelId,
             userId: effectiveUserId,
-            userName: client?.userName || msg.userName,
+            userName: p?.userName || client?.userName || 'Membro',
           });
 
           broadcast({
@@ -732,9 +760,8 @@ wss.on('connection', (ws) => {
           if (msg.toUserId) {
             let delivered = false;
             clients.forEach((c) => {
-              const matches =
-                c.userId === msg.toUserId ||
-                c.userId?.replace(/^guest-/, '') === msg.toUserId?.replace(/^guest-/, '');
+              // Strict identity matching: guest and verified UIDs never cross-match
+              const matches = c.userId === msg.toUserId;
               if (matches && c.ws.readyState === WebSocket.OPEN) {
                 c.ws.send(JSON.stringify({
                   type: 'webrtc-signal',
@@ -767,22 +794,22 @@ wss.on('connection', (ws) => {
 
         case 'server-invite': {
           const client = clients.get(clientId);
-          const senderUserId = client?.userId || msg.senderUserId || clientId;
+          // Sender userId is strictly taken from verified client connection
+          const senderUserId = client?.userId || clientId;
           const targetUserId = msg.targetUserId;
 
           if (targetUserId) {
             clients.forEach((c) => {
-              const matches =
-                c.userId === targetUserId ||
-                c.userId?.replace(/^guest-/, '') === targetUserId?.replace(/^guest-/, '');
+              // Strict identity matching without guest- prefix stripping
+              const matches = c.userId === targetUserId;
               if (matches && c.ws.readyState === WebSocket.OPEN) {
                 c.ws.send(
                   JSON.stringify({
                     type: 'room-invite-received',
                     inviteId: `inv-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
                     senderUserId,
-                    senderName: msg.senderName || client?.userName || 'Membro',
-                    senderAvatar: client?.userAvatar || msg.senderAvatar,
+                    senderName: client?.userName || 'Membro',
+                    senderAvatar: client?.userAvatar,
                     serverName: msg.serverName || 'Servidor',
                     serverId: msg.serverId,
                     channelId: msg.channelId,
@@ -915,7 +942,9 @@ app.get('/api/health', (req, res) => {
 // Ephemeral ICE Servers Generator (Google STUN + Authenticated HMAC Coturn TURN)
 app.get('/api/webrtc/ice-servers', requireAuth, (req, res) => {
   const turnSecret = process.env.TURN_SHARED_SECRET;
-  const turnUrl = process.env.TURN_URL;
+  const turnUrl = process.env.TURN_URL || process.env.VITE_TURN_URL;
+  const turnUsername = process.env.TURN_USERNAME || process.env.VITE_TURN_USERNAME;
+  const turnCredential = process.env.TURN_CREDENTIAL || process.env.VITE_TURN_CREDENTIAL;
 
   const iceServers: any[] = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -937,6 +966,12 @@ app.get('/api/webrtc/ice-servers', requireAuth, (req, res) => {
       urls: turnUrl,
       username,
       credential,
+    });
+  } else if (turnUrl && turnUsername && turnCredential) {
+    iceServers.push({
+      urls: turnUrl,
+      username: turnUsername,
+      credential: turnCredential,
     });
   }
 

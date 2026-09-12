@@ -174,16 +174,32 @@ export default function App() {
   });
   const [showExploreModal, setShowExploreModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
-  const [appNotifications, setAppNotifications] = useState<AppNotification[]>([
-    {
-      id: 'braza-welcome-news',
-      type: 'news',
-      title: 'Bem-vindo ao Braza Talk!',
-      message: 'Áudio espacial de ultra-baixa latência Opus, salas de voz protegidas, WebRTC P2P e compartilhamento de tela com som integrados.',
-      timestamp: Date.now() - 1000 * 60 * 45,
-      read: false,
-    },
-  ]);
+  const [appNotifications, setAppNotifications] = useState<AppNotification[]>(() => {
+    try {
+      const saved = localStorage.getItem('braza_talk_notifications');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [
+      {
+        id: 'braza-welcome-news',
+        type: 'news',
+        title: 'Bem-vindo ao Braza Talk!',
+        message: 'Áudio espacial de ultra-baixa latência Opus, salas de voz protegidas, WebRTC P2P e compartilhamento de tela com som integrados.',
+        timestamp: Date.now() - 1000 * 60 * 45,
+        read: false,
+      },
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('braza_talk_notifications', JSON.stringify(appNotifications));
+    } catch {}
+  }, [appNotifications]);
+
   const unreadNotificationsCount = useMemo(
     () => appNotifications.filter((n) => !n.read).length,
     [appNotifications]
@@ -516,13 +532,26 @@ export default function App() {
             }
           } catch {}
 
-          if (currentUser.id) {
+          if (token && auth.currentUser) {
             socket.send(
               JSON.stringify({
                 type: 'auth',
                 token,
-                userId: currentUser.id,
+                userId: auth.currentUser.uid,
                 userName: currentUser.name,
+                userAvatar: currentUser.avatar,
+                channelId: currentVoiceChannelId,
+              })
+            );
+          } else {
+            const guestId = currentUser.id?.startsWith('guest-')
+              ? currentUser.id
+              : `guest-${currentUser.id || 'anonymous'}`;
+            socket.send(
+              JSON.stringify({
+                type: 'auth',
+                userId: guestId,
+                userName: currentUser.name || 'Visitante',
                 userAvatar: currentUser.avatar,
                 channelId: currentVoiceChannelId,
               })
@@ -600,9 +629,45 @@ export default function App() {
     };
   }, [currentUser.id]);
 
+  // Re-authenticate WebSocket with fresh Firebase ID Token whenever user signs in or changes
+  useEffect(() => {
+    if (!firebaseUser) return;
+
+    let isCancelled = false;
+    const upgradeWSAuth = async () => {
+      try {
+        const token = await firebaseUser.getIdToken();
+        if (!isCancelled && wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'auth',
+              token,
+              userId: firebaseUser.uid,
+              userName: currentUser.name,
+              userAvatar: currentUser.avatar,
+              channelId: currentVoiceChannelId,
+            })
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to upgrade WebSocket auth with token:', err);
+      }
+    };
+
+    upgradeWSAuth();
+    return () => {
+      isCancelled = true;
+    };
+  }, [firebaseUser, currentUser.name, currentUser.avatar, currentVoiceChannelId]);
+
   // Handle incoming WebSocket broadcasts (Voice & Signals)
   const handleIncomingWSEvent = (data: any) => {
     switch (data.type) {
+      case 'auth-ok': {
+        // Authenticated identity confirmed by server
+        break;
+      }
+
       case 'voice-participants-sync':
       case 'init-voice-state': {
         if (data.participants && Array.isArray(data.participants)) {
@@ -1140,6 +1205,7 @@ export default function App() {
       const blankState = projectService.getBlankProjectState(newChanId, name, {
         description: projectConfig?.description,
         gameEngine: projectConfig?.gameEngine,
+        serverId: currentServer.id,
       });
       projectService.saveProjectState(newChanId, blankState).catch(() => {});
     }

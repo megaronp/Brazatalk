@@ -108,7 +108,7 @@ export const ProjectWorkspace: React.FC<ProjectWorkspaceProps> = ({
 
   // Load project state from Firestore / local storage on channel change and poll server runner status
   useEffect(() => {
-    projectService.loadProjectState(channel.id, channel.name).then(async (state) => {
+    projectService.loadProjectState(channel.id, channel.name, channel.serverId).then(async (state) => {
       // Pull any background active runner state from server
       const runnerStatus = await projectService.getPlanStatus(channel.id);
       if (runnerStatus && runnerStatus.plan) {
