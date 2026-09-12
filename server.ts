@@ -490,6 +490,8 @@ wss.on('connection', (ws) => {
 
           // Maintain stable connection in clients map
           const existingClient = clients.get(clientId);
+          const oldUserId = existingClient?.userId;
+
           if (existingClient) {
             existingClient.userId = identity.userId;
             existingClient.userName = identity.userName;
@@ -502,6 +504,65 @@ wss.on('connection', (ws) => {
               userName: identity.userName,
               userAvatar: identity.userAvatar,
               currentChannelId: msg.channelId,
+            });
+          }
+
+          // Identity upgrade: migrate voice participants & file presence to eliminate ghost participants
+          if (oldUserId && oldUserId !== identity.userId) {
+            const oldParticipant = voiceParticipants.get(oldUserId);
+            if (oldParticipant) {
+              voiceParticipants.delete(oldUserId);
+              const updatedParticipant: ServerVoiceParticipant = {
+                ...oldParticipant,
+                userId: identity.userId,
+                userName: identity.userName,
+                userAvatar: identity.userAvatar || oldParticipant.userAvatar,
+              };
+              voiceParticipants.set(identity.userId, updatedParticipant);
+
+              broadcast({
+                type: 'voice-user-left',
+                channelId: oldParticipant.channelId,
+                userId: oldUserId,
+              });
+              broadcast({
+                type: 'voice-user-joined',
+                channelId: updatedParticipant.channelId,
+                user: {
+                  id: updatedParticipant.userId,
+                  name: updatedParticipant.userName,
+                  avatar: updatedParticipant.userAvatar,
+                },
+              });
+              broadcast({
+                type: 'voice-participants-sync',
+                participants: Array.from(voiceParticipants.values()),
+              });
+            }
+
+            // Migrate channel file presence maps
+            channelFilePresence.forEach((channelMap, chId) => {
+              let changed = false;
+              channelMap.forEach((users) => {
+                const oldPresence = users.get(oldUserId);
+                if (oldPresence) {
+                  users.delete(oldUserId);
+                  users.set(identity.userId, {
+                    ...oldPresence,
+                    userId: identity.userId,
+                    userName: identity.userName,
+                    userAvatar: identity.userAvatar,
+                  });
+                  changed = true;
+                }
+              });
+              if (changed) {
+                broadcastToChannel(chId, {
+                  type: 'file-presence-sync',
+                  channelId: chId,
+                  presence: getChannelPresenceSummary(chId),
+                });
+              }
             });
           }
 
@@ -942,9 +1003,7 @@ app.get('/api/health', (req, res) => {
 // Ephemeral ICE Servers Generator (Google STUN + Authenticated HMAC Coturn TURN)
 app.get('/api/webrtc/ice-servers', requireAuth, (req, res) => {
   const turnSecret = process.env.TURN_SHARED_SECRET;
-  const turnUrl = process.env.TURN_URL || process.env.VITE_TURN_URL;
-  const turnUsername = process.env.TURN_USERNAME || process.env.VITE_TURN_USERNAME;
-  const turnCredential = process.env.TURN_CREDENTIAL || process.env.VITE_TURN_CREDENTIAL;
+  const turnUrl = process.env.TURN_URL;
 
   const iceServers: any[] = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -966,12 +1025,6 @@ app.get('/api/webrtc/ice-servers', requireAuth, (req, res) => {
       urls: turnUrl,
       username,
       credential,
-    });
-  } else if (turnUrl && turnUsername && turnCredential) {
-    iceServers.push({
-      urls: turnUrl,
-      username: turnUsername,
-      credential: turnCredential,
     });
   }
 

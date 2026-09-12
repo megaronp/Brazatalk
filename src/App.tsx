@@ -466,7 +466,7 @@ export default function App() {
   useEffect(() => {
     if (!firebaseUser || !currentChannel.id || currentChannel.id === 'chan-fallback') return;
 
-    const unsubscribeMessages = firebaseDb.subscribeToChannelMessages(currentChannel.id, async (channelMsgs) => {
+    const unsubscribeMessages = firebaseDb.subscribeToChannelMessages(currentChannel.id, currentServer?.id, async (channelMsgs) => {
       // Decrypt any E2EE encrypted messages using WebCrypto AES-GCM-256
       const processedMsgs = await Promise.all(
         channelMsgs.map(async (msg) => {
@@ -495,7 +495,7 @@ export default function App() {
     });
 
     return () => unsubscribeMessages();
-  }, [firebaseUser, currentChannel.id]);
+  }, [firebaseUser, currentChannel.id, currentServer?.id]);
 
   const currentChannelMessages = messages[currentChannel.id] || [];
 
@@ -882,7 +882,7 @@ export default function App() {
 
     // Persist to Firebase Firestore
     try {
-      await firebaseDb.sendMessage(newMsg);
+      await firebaseDb.sendMessage(newMsg, currentServer?.id);
     } catch (e) {
       console.warn('Failed to send message immediately to Firestore, saved to offline outbox:', e);
       setPendingSyncCount((c) => c + 1);
@@ -943,7 +943,7 @@ export default function App() {
           ...prev,
           [currentChannel.id]: [...(prev[currentChannel.id] || []), botMsg],
         }));
-        await firebaseDb.sendMessage(botMsg);
+        await firebaseDb.sendMessage(botMsg, currentServer?.id);
         soundEngine.playMessage();
       }).catch((err) => {
         console.error('Slash command execution error:', err);
@@ -970,7 +970,7 @@ export default function App() {
             ...prev,
             [currentChannel.id]: [...(prev[currentChannel.id] || []), botMsg],
           }));
-          await firebaseDb.sendMessage(botMsg);
+          await firebaseDb.sendMessage(botMsg, currentServer?.id);
           soundEngine.playMention();
         }, 200);
       });
@@ -1014,7 +1014,7 @@ export default function App() {
     }));
 
     try {
-      await firebaseDb.updateMessage(messageId, { reactions: updatedReactions });
+      await firebaseDb.updateMessage(messageId, { reactions: updatedReactions }, currentServer?.id, currentChannel.id);
     } catch (e) {
       console.error('Failed to update reactions:', e);
     }
@@ -1035,7 +1035,7 @@ export default function App() {
     }));
 
     try {
-      await firebaseDb.updateMessage(messageId, { pinned: nextPinned });
+      await firebaseDb.updateMessage(messageId, { pinned: nextPinned }, currentServer?.id, currentChannel.id);
     } catch (e) {
       console.error('Failed to update pinned state:', e);
     }
@@ -1048,7 +1048,7 @@ export default function App() {
       [currentChannel.id]: (prev[currentChannel.id] || []).filter((m) => m.id !== messageId),
     }));
     try {
-      await firebaseDb.deleteMessage(messageId);
+      await firebaseDb.deleteMessage(messageId, currentServer?.id, currentChannel.id);
     } catch (e) {
       console.error('Failed to delete message:', e);
     }

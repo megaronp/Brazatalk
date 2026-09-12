@@ -235,8 +235,13 @@ export const firebaseDb = {
     await deleteDoc(doc(db, 'servers', serverId));
   },
 
-  // Listen to messages for a specific channel with pagination/limit and offline cache (P5: leak-free cleanup)
-  subscribeToChannelMessages(channelId: string, callback: (messages: Message[]) => void, maxCount: number = 60) {
+  // Listen to messages for a specific channel with pagination/limit and offline cache (strictly scoped to server subcollection)
+  subscribeToChannelMessages(
+    channelId: string,
+    serverId: string | undefined,
+    callback: (messages: Message[]) => void,
+    maxCount: number = 60
+  ) {
     if (!channelId) return () => {};
 
     // Deliver offline cached messages immediately
@@ -246,7 +251,8 @@ export const firebaseDb = {
       }
     }).catch(() => {});
 
-    const messagesRef = collection(db, 'messages');
+    const targetServerId = serverId || 'server-braza-community';
+    const messagesRef = collection(db, 'servers', targetServerId, 'channels', channelId, 'messages');
     let isCleanedUp = false;
     let currentUnsub: (() => void) | null = null;
 
@@ -255,7 +261,6 @@ export const firebaseDb = {
       try {
         const fallbackQ = query(
           messagesRef,
-          where('channelId', '==', channelId),
           limit(maxCount)
         );
         currentUnsub = onSnapshot(fallbackQ, (fallbackSnap) => {
@@ -267,7 +272,7 @@ export const firebaseDb = {
           callback(msgs);
           offlineStorage.cacheMessages(msgs).catch(() => {});
         }, (fallbackErr) => {
-          handleFirestoreError(fallbackErr, OperationType.LIST, `messages?channelId=${channelId}`);
+          handleFirestoreError(fallbackErr, OperationType.LIST, `servers/${targetServerId}/channels/${channelId}/messages`);
           offlineStorage.getCachedMessages(channelId).then((cached) => {
             if (cached && cached.length > 0) callback(cached);
           }).catch(() => {});
@@ -280,7 +285,6 @@ export const firebaseDb = {
     try {
       const q = query(
         messagesRef, 
-        where('channelId', '==', channelId),
         orderBy('timestamp', 'desc'),
         limit(maxCount)
       );
@@ -309,16 +313,17 @@ export const firebaseDb = {
     };
   },
 
-  // Send a message with offline fallback queue
-  async sendMessage(message: Message) {
-    const msgRef = doc(db, 'messages', message.id);
-    const cleaned = sanitizeFirestoreData(message);
+  // Send a message with offline fallback queue (strictly saved in server subcollection)
+  async sendMessage(message: Message, serverId?: string) {
+    const sId = serverId || message.serverId || 'server-braza-community';
+    const msgRef = doc(db, 'servers', sId, 'channels', message.channelId, 'messages', message.id);
+    const cleaned = sanitizeFirestoreData({ ...message, serverId: sId });
     try {
       await setDoc(msgRef, cleaned);
       await offlineStorage.cacheMessages([message]);
     } catch (err) {
       console.warn('Firestore sendMessage failed or offline, queuing to outbox:', err);
-      await offlineStorage.queueOutboxMessage(message);
+      await offlineStorage.queueOutboxMessage({ ...message, serverId: sId });
       await offlineStorage.cacheMessages([message]);
       throw err;
     }
@@ -331,8 +336,9 @@ export const firebaseDb = {
     let synced = 0;
     for (const msg of pending) {
       try {
-        const msgRef = doc(db, 'messages', msg.id);
-        const cleaned = sanitizeFirestoreData(msg);
+        const sId = msg.serverId || 'server-braza-community';
+        const msgRef = doc(db, 'servers', sId, 'channels', msg.channelId, 'messages', msg.id);
+        const cleaned = sanitizeFirestoreData({ ...msg, serverId: sId });
         await setDoc(msgRef, cleaned);
         synced++;
       } catch (err) {
@@ -346,30 +352,34 @@ export const firebaseDb = {
   },
 
   // Update a message (e.g. edit, reactions, pin)
-  async updateMessage(messageId: string, updates: Partial<Message>) {
-    const msgRef = doc(db, 'messages', messageId);
+  async updateMessage(messageId: string, updates: Partial<Message>, serverId?: string, channelId?: string) {
+    const sId = serverId || updates.serverId || 'server-braza-community';
+    const cId = channelId || updates.channelId;
+    if (!cId) {
+      console.warn('updateMessage requires channelId');
+      return;
+    }
+    const msgRef = doc(db, 'servers', sId, 'channels', cId, 'messages', messageId);
     const cleaned = sanitizeFirestoreData(updates);
     await updateDoc(msgRef, cleaned as Record<string, any>);
   },
 
   // Delete a message
   async deleteMessage(messageId: string, serverId?: string, channelId?: string) {
-    if (serverId && channelId) {
-      try {
-        await deleteDoc(doc(db, 'servers', serverId, 'channels', channelId, 'messages', messageId));
-      } catch (e) {
-        console.warn('Subcollection delete failed, attempting root delete:', e);
-      }
+    const sId = serverId || 'server-braza-community';
+    if (!channelId) {
+      console.warn('deleteMessage requires channelId');
+      return;
     }
-    await deleteDoc(doc(db, 'messages', messageId));
+    await deleteDoc(doc(db, 'servers', sId, 'channels', channelId, 'messages', messageId));
   },
 
   // Delete all messages belonging to a deleted channel (complete dependency wipe)
   async deleteChannelMessages(channelId: string, serverId?: string) {
     try {
-      const messagesRef = collection(db, 'messages');
-      const q = query(messagesRef, where('channelId', '==', channelId));
-      const snap = await getDocs(q);
+      const sId = serverId || 'server-braza-community';
+      const messagesRef = collection(db, 'servers', sId, 'channels', channelId, 'messages');
+      const snap = await getDocs(messagesRef);
       const deletePromises = snap.docs.map((docSnap) => deleteDoc(docSnap.ref));
       await Promise.all(deletePromises);
     } catch (e) {

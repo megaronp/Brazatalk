@@ -1051,6 +1051,12 @@ export const projectService = {
     try {
       const docRef = doc(db, 'projectRooms', channelId);
       const { customApiKey, files, ...safeCloudState } = updatedState;
+      if (!safeCloudState.serverId) {
+        safeCloudState.serverId = 'server-braza-community';
+      }
+      if (!safeCloudState.channelId) {
+        safeCloudState.channelId = channelId;
+      }
       // Store without files array so files are strictly owned by subcollection /files
       await setDoc(docRef, safeCloudState, { merge: true });
     } catch (e) {

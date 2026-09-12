@@ -66,88 +66,63 @@ service cloud.firestore {
     }
 
     // Project Rooms (Workspace / Autonomous AI development rooms)
+    // Strictly scoped to server members with mandatory serverId (fail-closed)
     match /projectRooms/{channelId} {
       allow read: if isAuthenticated() && (
-        resource == null ||
-        !('serverId' in resource.data) ||
-        resource.data.serverId == null ||
-        isServerMember(resource.data.serverId) ||
+        (resource != null && 'serverId' in resource.data && resource.data.serverId != null && isServerMember(resource.data.serverId)) ||
         isAdmin()
       );
       allow create: if isAuthenticated() && (
         request.resource.data.channelId == channelId &&
-        (
-          !('serverId' in request.resource.data) ||
-          request.resource.data.serverId == null ||
-          isServerMember(request.resource.data.serverId) ||
-          isAdmin()
-        )
+        ('serverId' in request.resource.data && request.resource.data.serverId != null && isServerMember(request.resource.data.serverId)) ||
+        isAdmin()
       );
       allow update: if isAuthenticated() && (
-        (resource != null && 'serverId' in resource.data && resource.data.serverId != null ? isServerMember(resource.data.serverId) : true) ||
+        (resource != null && 'serverId' in resource.data && resource.data.serverId != null && isServerMember(resource.data.serverId)) ||
         isAdmin()
       );
       allow delete: if isAuthenticated() && (
-        (resource != null && 'serverId' in resource.data && resource.data.serverId != null ? isServerMember(resource.data.serverId) : true) ||
+        (resource != null && 'serverId' in resource.data && resource.data.serverId != null && isServerMember(resource.data.serverId)) ||
         isAdmin()
       );
 
-      // Granular per-file documents to eliminate collaborative clobbering
+      // Granular per-file documents strictly scoped to parent projectRoom's serverId
       match /files/{fileId} {
         allow read: if isAuthenticated() && (
-          !exists(/databases/$(database)/documents/projectRooms/$(channelId)) ||
-          !('serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data) ||
-          get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId == null ||
-          isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId) ||
+          (exists(/databases/$(database)/documents/projectRooms/$(channelId)) &&
+           'serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data &&
+           get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId != null &&
+           isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId)) ||
           isAdmin()
         );
         allow create, update, delete: if isAuthenticated() && (
-          !exists(/databases/$(database)/documents/projectRooms/$(channelId)) ||
-          !('serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data) ||
-          get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId == null ||
-          isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId) ||
+          (exists(/databases/$(database)/documents/projectRooms/$(channelId)) &&
+           'serverId' in get(/databases/$(database)/documents/projectRooms/$(channelId)).data &&
+           get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId != null &&
+           isServerMember(get(/databases/$(database)/documents/projectRooms/$(channelId)).data.serverId)) ||
           isAdmin()
         );
       }
     }
 
-    // Messages Collection: authenticated messages, author edit rules, and reactions
-    match /messages/{messageId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (
+    // Messages: strictly scoped under servers/{serverId}/channels/{channelId}/messages
+    // Root /messages collection is closed to prevent cross-server data leaks
+    match /servers/{serverId}/channels/{channelId}/messages/{messageId} {
+      allow read: if isServerMember(serverId);
+      allow create: if isServerMember(serverId) && (
         request.resource.data.authorId == request.auth.uid ||
         isAdmin()
       );
-      allow update: if isAuthenticated() && (
+      allow update: if isServerMember(serverId) && (
         // Author editing own message (authorId and channelId must be strictly immutable)
         (resource.data.authorId == request.auth.uid &&
          request.resource.data.authorId == resource.data.authorId &&
          request.resource.data.channelId == resource.data.channelId) ||
-        // Other users can only toggle reactions or pin status
+        // Other members of the server can only toggle reactions or pin status
         (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned'])) ||
         isAdmin()
       );
-      allow delete: if isAuthenticated() && (
-        resource.data.authorId == request.auth.uid ||
-        isAdmin()
-      );
-    }
-
-    // Subcollection messages inside servers/channels
-    match /servers/{serverId}/channels/{channelId}/messages/{messageId} {
-      allow read: if isAuthenticated();
-      allow create: if isAuthenticated() && (
-        request.resource.data.authorId == request.auth.uid ||
-        isAdmin()
-      );
-      allow update: if isAuthenticated() && (
-        (resource.data.authorId == request.auth.uid &&
-         request.resource.data.authorId == resource.data.authorId &&
-         request.resource.data.channelId == resource.data.channelId) ||
-        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions', 'pinned'])) ||
-        isAdmin()
-      );
-      allow delete: if isAuthenticated() && (
+      allow delete: if isServerMember(serverId) && (
         resource.data.authorId == request.auth.uid ||
         isAdmin()
       );
